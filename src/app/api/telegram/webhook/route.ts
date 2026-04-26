@@ -3,6 +3,10 @@ import { getBot } from "@/lib/bot/telegram";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Voice messages need time to: download from Telegram, send to Gemini for
+// transcription + intent parsing, and write to Postgres. Vercel's default
+// 10s timeout on Hobby plan kills this mid-call. Bump to the Hobby max.
+export const maxDuration = 60;
 
 let _handler: ((req: Request) => Promise<Response>) | null = null;
 function handler() {
