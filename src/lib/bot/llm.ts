@@ -5,20 +5,41 @@ import { GoogleGenAI, type Part } from "@google/genai";
 // turned out to be 0-limit on free tier; 2.5-flash is 10/250.
 const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash-lite";
 
-let _client: GoogleGenAI | null = null;
-function client(): GoogleGenAI {
-  if (!_client) {
-    if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY missing");
-    _client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return _client;
-}
-
 // Sleep helper.
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// Extract the API's suggested retry delay (in seconds) from a 429 error message.
-// Falls back to 2s if not present. Capped at 8s so the bot doesn't hang.
+// Read keys from env. Supports either:
+//   GEMINI_API_KEY=AIza...,AIza...        (comma-separated)
+//   GEMINI_API_KEY=AIza...                (single key, original behaviour)
+function loadKeys(): string[] {
+  const raw = process.env.GEMINI_API_KEY ?? "";
+  return raw
+    .split(",")
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+}
+
+// Cache one client per key — creating GoogleGenAI does no network work,
+// but we cache anyway so repeated calls hit the same instance.
+const clients = new Map<string, GoogleGenAI>();
+function clientFor(key: string): GoogleGenAI {
+  let c = clients.get(key);
+  if (!c) {
+    c = new GoogleGenAI({ apiKey: key });
+    clients.set(key, c);
+  }
+  return c;
+}
+
+// Round-robin cursor across the configured keys. Survives within a single
+// process; a fresh serverless cold-start always starts at 0, but that's fine.
+let cursor = 0;
+
+function isRateLimit(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b429\b|RESOURCE_EXHAUSTED|quota|rate/i.test(msg);
+}
+
 function retryDelayMs(err: unknown): number {
   const msg = err instanceof Error ? err.message : String(err);
   const m = msg.match(/retry in (\d+(?:\.\d+)?)s/i);
@@ -26,19 +47,33 @@ function retryDelayMs(err: unknown): number {
   return Math.min(Math.ceil(secs * 1000), 8_000);
 }
 
-function isRateLimit(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /\b429\b|RESOURCE_EXHAUSTED|quota|rate/i.test(msg);
-}
+// Try the call across every available key. On a 429 we immediately try
+// the next key (no sleep — different key = different quota). Only after
+// every key has failed with 429 do we sleep and retry once on the
+// rotating cursor. Non-429 errors propagate immediately.
+async function callWithFallback<T>(fn: (c: GoogleGenAI) => Promise<T>): Promise<T> {
+  const keys = loadKeys();
+  if (keys.length === 0) throw new Error("GEMINI_API_KEY missing");
 
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (!isRateLimit(e)) throw e;
-    await sleep(retryDelayMs(e));
-    return await fn();
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const key = keys[(cursor + attempt) % keys.length];
+    try {
+      const result = await fn(clientFor(key));
+      // Advance the cursor so the next call rotates evenly across keys.
+      cursor = (cursor + attempt + 1) % keys.length;
+      return result;
+    } catch (e) {
+      if (!isRateLimit(e)) throw e;
+      lastErr = e;
+      // try next key
+    }
   }
+
+  // All keys exhausted — back off briefly, then retry once on the next key.
+  await sleep(retryDelayMs(lastErr));
+  cursor = (cursor + 1) % keys.length;
+  return fn(clientFor(keys[cursor]));
 }
 
 // Generate a structured JSON response. We request JSON mime type and pass the
@@ -49,8 +84,8 @@ export async function generateJson<T = unknown>(args: {
   userParts: Part[];
   responseSchema: object;
 }): Promise<T> {
-  const text = await withRetry(async () => {
-    const resp = await client().models.generateContent({
+  const text = await callWithFallback(async (c) => {
+    const resp = await c.models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts: args.userParts }],
       config: {
@@ -72,8 +107,8 @@ export async function generateText(args: {
   systemInstruction?: string;
   userParts: Part[];
 }): Promise<string> {
-  return withRetry(async () => {
-    const resp = await client().models.generateContent({
+  return callWithFallback(async (c) => {
+    const resp = await c.models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts: args.userParts }],
       config: {
