@@ -137,9 +137,10 @@ export function TransactionRow({
           >
             <Pencil className="h-3.5 w-3.5 transition-transform duration-200 group-hover/btn:rotate-12" />
           </button>
-          <form
-            action={async (fd) => {
-              fd.set("id", String(tx.id));
+          <button
+            type="button"
+            aria-label="Delete"
+            onClick={async () => {
               const ok = await confirm({
                 title: "Delete this transaction?",
                 description: `${tx.kind === "income" ? "+" : "−"} ${formatMoney(tx.amount)} · ${tx.category_label_en} · ${formatDate(tx.occurred_on)}. This can't be undone.`,
@@ -147,19 +148,16 @@ export function TransactionRow({
                 variant: "danger",
               });
               if (!ok) return;
+              const fd = new FormData();
+              fd.set("id", String(tx.id));
               startTransition(async () => {
                 try { await deleteTransactionAction(fd); } catch {}
               });
             }}
+            className="group/btn inline-flex h-7 w-7 items-center justify-center rounded-md text-[--color-muted] transition-all duration-150 hover:scale-110 hover:bg-red-500/10 hover:text-red-600 active:scale-95"
           >
-            <button
-              type="submit"
-              className="group/btn inline-flex h-7 w-7 items-center justify-center rounded-md text-[--color-muted] transition-all duration-150 hover:scale-110 hover:bg-red-500/10 hover:text-red-600 active:scale-95"
-              aria-label="Delete"
-            >
-              <Trash2 className="h-3.5 w-3.5 transition-transform duration-200 group-hover/btn:-rotate-12" />
-            </button>
-          </form>
+            <Trash2 className="h-3.5 w-3.5 transition-transform duration-200 group-hover/btn:-rotate-12" />
+          </button>
         </div>
       </td>
     </tr>

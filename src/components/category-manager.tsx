@@ -154,9 +154,10 @@ function CategoryRow({ category }: { category: Category }) {
           </button>
         </form>
         {!category.is_system ? (
-          <form
-            action={async (fd) => {
-              fd.set("id", String(category.id));
+          <button
+            type="button"
+            aria-label="Delete"
+            onClick={async () => {
               const ok = await confirm({
                 title: `Delete "${category.label_en}"?`,
                 description: "Transactions using this category will keep their reference. This can't be undone.",
@@ -164,17 +165,14 @@ function CategoryRow({ category }: { category: Category }) {
                 variant: "danger",
               });
               if (!ok) return;
+              const fd = new FormData();
+              fd.set("id", String(category.id));
               startTransition(async () => { await deleteCategoryAction(fd); });
             }}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[--color-muted] hover:bg-red-500/10 hover:text-red-600"
           >
-            <button
-              type="submit"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[--color-muted] hover:bg-red-500/10 hover:text-red-600"
-              aria-label="Delete"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </form>
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
         ) : null}
       </div>
     </li>
