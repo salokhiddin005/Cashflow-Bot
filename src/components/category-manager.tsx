@@ -11,6 +11,7 @@ import {
   updateCategoryAction,
 } from "@/app/actions";
 import { Button, Card, CardBody, CardHeader, Input } from "./ui";
+import { useConfirm } from "./confirm-dialog";
 
 const COLORS = [
   "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
@@ -73,6 +74,7 @@ function CategorySection({
 function CategoryRow({ category }: { category: Category }) {
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
+  const confirm = useConfirm();
 
   if (editing) {
     return (
@@ -153,9 +155,15 @@ function CategoryRow({ category }: { category: Category }) {
         </form>
         {!category.is_system ? (
           <form
-            action={(fd) => {
+            action={async (fd) => {
               fd.set("id", String(category.id));
-              if (!confirm("Delete this category? Transactions using it will keep their reference.")) return;
+              const ok = await confirm({
+                title: `Delete "${category.label_en}"?`,
+                description: "Transactions using this category will keep their reference. This can't be undone.",
+                confirmText: "Yes, delete",
+                variant: "danger",
+              });
+              if (!ok) return;
               startTransition(async () => { await deleteCategoryAction(fd); });
             }}
           >

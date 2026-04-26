@@ -7,6 +7,7 @@ import type { Category, TransactionWithCategory } from "@/lib/db/types";
 import { formatDate, formatMoney } from "@/lib/format";
 import { deleteTransactionAction, updateTransactionAction } from "@/app/actions";
 import { Pill } from "./ui";
+import { useConfirm } from "./confirm-dialog";
 
 export function TransactionRow({
   tx,
@@ -20,6 +21,7 @@ export function TransactionRow({
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   if (editing) {
     return (
@@ -136,9 +138,15 @@ export function TransactionRow({
             <Pencil className="h-3.5 w-3.5 transition-transform duration-200 group-hover/btn:rotate-12" />
           </button>
           <form
-            action={(fd) => {
+            action={async (fd) => {
               fd.set("id", String(tx.id));
-              if (!confirm("Delete this transaction?")) return;
+              const ok = await confirm({
+                title: "Delete this transaction?",
+                description: `${tx.kind === "income" ? "+" : "−"} ${formatMoney(tx.amount)} · ${tx.category_label_en} · ${formatDate(tx.occurred_on)}. This can't be undone.`,
+                confirmText: "Yes, delete",
+                variant: "danger",
+              });
+              if (!ok) return;
               startTransition(async () => {
                 try { await deleteTransactionAction(fd); } catch {}
               });
