@@ -1,26 +1,83 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fafafa;
+  --foreground: #0a0a0a;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: #e4e4e7;
+  --muted: #71717a;
+  --muted-2: #a1a1aa;
+  --brand: #0f172a;
+  --brand-foreground: #fafafa;
+  --success: #059669;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --accent: #4f46e5;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-2: var(--muted-2);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-accent: var(--accent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #09090b;
+    --foreground: #fafafa;
+    --surface: #18181b;
+    --surface-2: #27272a;
+    --border: #27272a;
+    --muted: #a1a1aa;
+    --muted-2: #71717a;
+    --brand: #fafafa;
+    --brand-foreground: #09090b;
   }
 }
 
-body {
+html, body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Tells the browser to render native form chrome (select dropdowns,
+     date pickers, scrollbars) using the matching theme — fixes the
+     unreadable white-on-white <select> options in dark mode. */
+  color-scheme: light dark;
 }
+
+/* Belt-and-suspenders: explicitly style native <option> elements so
+   browsers that don't honour color-scheme still render them readably. */
+option, optgroup {
+  background-color: var(--surface);
+  color: var(--foreground);
+}
+
+body {
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Focus ring helpers */
+@layer utilities {
+  .focus-ring {
+    @apply outline-none ring-0 focus-visible:ring-2 focus-visible:ring-[--color-accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--color-background];
+  }
+}
+
+/* Tabular numerals on money */
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* Recharts dark-mode tweak */
+.recharts-cartesian-axis-tick text { fill: var(--muted); }
+.recharts-tooltip-wrapper { outline: none !important; }

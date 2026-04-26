@@ -1,65 +1,105 @@
-import Image from "next/image";
+import { PeriodTabs } from "@/components/period-tabs";
+import { KpiCard } from "@/components/kpi-card";
+import { RunwayCard } from "@/components/runway-card";
+import { QuickAdd } from "@/components/quick-add";
+import { RecentTransactions } from "@/components/recent-transactions";
+import { Onboarding } from "@/components/onboarding";
+import { ActivityHeatmap } from "@/components/activity-heatmap";
+import { RecurringPanel } from "@/components/recurring-panel";
+import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui";
+import {
+  countTransactions,
+  listCategories,
+  totalsBetween,
+} from "@/lib/db/queries";
+import { sparklineSeries } from "@/lib/insights";
+import { resolvePeriod, type PeriodKey } from "@/lib/dates";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const ALLOWED: PeriodKey[] = ["this_month", "last_30", "last_7", "ytd"];
+
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string }>;
+}) {
+  const sp = await searchParams;
+  const periodKey = (ALLOWED.includes(sp.period as PeriodKey) ? sp.period : "this_month") as PeriodKey;
+  const period = resolvePeriod(periodKey);
+
+  const totalCount = await countTransactions();
+  const categories = await listCategories();
+
+  if (totalCount === 0) {
+    return (
+      <div className="space-y-8">
+        <Onboarding />
+        <div className="grid gap-6 lg:grid-cols-3" id="quick-add-section">
+          <div className="lg:col-span-2">
+            <RecentTransactions />
+          </div>
+          <Card>
+            <CardHeader>
+              <div className="text-sm font-semibold">Quick add</div>
+              <div className="mt-0.5 text-[12px] text-[--color-muted]">
+                Log a transaction without opening Telegram.
+              </div>
+            </CardHeader>
+            <CardBody>
+              <QuickAdd categories={categories} />
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // Run all read-only queries in parallel so first-byte stays fast.
+  const [cur, prev, incomeSpark, expenseSpark, netSpark] = await Promise.all([
+    totalsBetween(period.from, period.to),
+    totalsBetween(period.prev.from, period.prev.to),
+    sparklineSeries("income",  14),
+    sparklineSeries("expense", 14),
+    sparklineSeries("net",     14),
+  ]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-6">
+      <PageHeader
+        title="Overview"
+        subtitle={`${period.label} — compared with ${period.prev.label}`}
+      >
+        <PeriodTabs current={period.key} />
+      </PageHeader>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Income"   current={cur.income}  previous={prev.income}  intent="income"  spark={incomeSpark} />
+        <KpiCard label="Expenses" current={cur.expense} previous={prev.expense} intent="expense" spark={expenseSpark} />
+        <KpiCard label="Net"      current={cur.net}     previous={prev.net}     intent="net"     spark={netSpark} />
+        <RunwayCard />
+      </div>
+
+      <ActivityHeatmap weeks={13} />
+
+      <div className="grid gap-6 lg:grid-cols-3" id="quick-add-section">
+        <div className="lg:col-span-2 space-y-6">
+          <RecentTransactions />
+          <RecurringPanel />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <Card>
+          <CardHeader>
+            <div className="text-sm font-semibold">Quick add</div>
+            <div className="mt-0.5 text-[12px] text-[--color-muted]">
+              Log a transaction without opening Telegram.
+            </div>
+          </CardHeader>
+          <CardBody>
+            <QuickAdd categories={categories} />
+          </CardBody>
+        </Card>
+      </div>
     </div>
   );
 }
