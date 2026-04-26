@@ -2,7 +2,7 @@
 
 A Telegram bot + web dashboard that lets a small or medium business in Uzbekistan log income and expenses **by talking to a bot** in Uzbek, Russian, or English (voice or text), and see everything in one place. Built for the Task 01 brief.
 
-- **Live demo:** https://your-app.vercel.app *(replace after deploy)*
+- **Live demo:** https://cashflow-bot-bice.vercel.app
 - **Telegram bot:** [@business_ledger_bot](https://t.me/business_ledger_bot)
 
 ## Highlights
