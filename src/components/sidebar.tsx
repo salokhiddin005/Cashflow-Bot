@@ -1,6 +1,9 @@
 import Link from "next/link";
-import { Wallet } from "lucide-react";
+import { LogOut, Wallet } from "lucide-react";
 import { NavItem } from "./nav-item";
+import { Button } from "./ui";
+import { getCurrentUserAndWorkspace } from "@/lib/auth/session";
+import { logoutAction } from "@/app/actions";
 
 const NAV = [
   { href: "/",             label: "Overview",     iconName: "overview" as const,     exact: true },
@@ -9,7 +12,12 @@ const NAV = [
   { href: "/categories",   label: "Categories",   iconName: "categories" as const },
 ];
 
-export function Sidebar() {
+export async function Sidebar() {
+  const ctx = await getCurrentUserAndWorkspace();
+  const identity = ctx
+    ? (ctx.user.email ?? ctx.user.phone ?? (ctx.user.tg_username ? `@${ctx.user.tg_username}` : "Account"))
+    : null;
+
   return (
     <aside className="hidden w-60 shrink-0 border-r border-[--color-border] bg-[--color-surface] md:flex md:flex-col">
       <Link
@@ -32,9 +40,28 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      <div className="border-t border-[--color-border] px-5 py-4 text-xs text-[--color-muted]">
-        <div className="font-medium text-[--color-foreground]">Need to log on the go?</div>
-        <div className="mt-1">Talk to your bot on Telegram. Voice or text — both work.</div>
+      {/* Account block — pinned to the bottom of the sidebar so Sign Out is
+          always one click away regardless of which page you're on. */}
+      <div className="border-t border-[--color-border] px-3 py-3">
+        {identity ? (
+          <div className="mb-2 flex items-center gap-2 px-2 text-[12px] text-[--color-muted]">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-amber-500 via-orange-500 to-rose-500 text-[11px] font-semibold text-white">
+              {identity.replace(/^@/, "").slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12.5px] font-medium text-[--color-foreground]">
+                Signed in
+              </div>
+              <div className="truncate text-[11.5px] text-[--color-muted]">{identity}</div>
+            </div>
+          </div>
+        ) : null}
+        <form action={logoutAction}>
+          <Button type="submit" variant="danger" size="md" className="w-full">
+            <LogOut className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+            Sign out
+          </Button>
+        </form>
       </div>
     </aside>
   );

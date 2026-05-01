@@ -24,6 +24,7 @@ import { transcribeAudio } from "./voice";
 import { parseIntent, type LogIntent, type ParsedIntent } from "./intent";
 import { getChatState, setLastTransaction, setPendingIntent } from "./state";
 import { ensureBotContext, getDashboardUrlForBotUser } from "./per-user";
+import { getBotStats } from "./stats";
 import { newToken, tokenExpiry } from "../auth/tokens";
 import { createPasswordResetToken } from "../db/auth-queries";
 import {
@@ -156,6 +157,9 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
   }
   if (/^\/reset\b/i.test(text)) {
     return doResetViaBot(tgUser, userLang);
+  }
+  if (/^\/stats\b/i.test(text)) {
+    return doStats(tgUser);
   }
   if (/^\/report\b/i.test(text)) {
     return doReportPicker(userLang);
@@ -761,6 +765,34 @@ export async function deleteByTxId(workspaceId: number, txId: number, chatId: nu
 // ────────────────────────────────────────────────────────────────────
 // /dashboard and /reset
 // ────────────────────────────────────────────────────────────────────
+
+// Owner-only stats command. Set ADMIN_TG_USERNAMES (comma-separated, no @)
+// to whichever Telegram usernames should see the numbers. Anyone else gets
+// the same friendly "I don't know that command" reply that smalltalk would
+// give, so the gate isn't advertised.
+async function doStats(tgUser: TelegramUser): Promise<BotReply> {
+  const allow = (process.env.ADMIN_TG_USERNAMES ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/^@/, "").toLowerCase())
+    .filter(Boolean);
+  const me = (tgUser.username ?? "").toLowerCase();
+  if (!me || !allow.includes(me)) {
+    return { text: "Hmm — I don't know that command. Try /help to see what I can do." };
+  }
+
+  const s = await getBotStats();
+  const lines = [
+    "📊 *Bot stats*",
+    "```",
+    `Total users:        ${s.totalUsers.toString().padStart(8)}`,
+    `Monthly active:     ${s.monthlyActive.toString().padStart(8)}`,
+    `Weekly  active:     ${s.weeklyActive.toString().padStart(8)}`,
+    `Daily   active:     ${s.dailyActive.toString().padStart(8)}`,
+    `New (last 30d):     ${s.newThisMonth.toString().padStart(8)}`,
+    "```",
+  ];
+  return { text: lines.join("\n") };
+}
 
 async function doDashboard(tgUser: TelegramUser, lang: Lang): Promise<BotReply> {
   const url = await getDashboardUrlForBotUser(tgUser);

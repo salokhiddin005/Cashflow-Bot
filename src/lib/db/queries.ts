@@ -180,6 +180,9 @@ export async function upsertTelegramUser(u: {
   last_name?: string | null;
   language_code?: string | null;
 }): Promise<TelegramUser> {
+  // last_seen_at is bumped on every upsert, which fires on every bot
+  // interaction (via ensureBotContext). That timestamp is what powers the
+  // MAU query and the bot-description refresh.
   await execute(
     `INSERT INTO telegram_users (telegram_id, workspace_id, username, first_name, last_name, language_code)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -187,7 +190,8 @@ export async function upsertTelegramUser(u: {
        username      = EXCLUDED.username,
        first_name    = EXCLUDED.first_name,
        last_name     = EXCLUDED.last_name,
-       language_code = COALESCE(EXCLUDED.language_code, telegram_users.language_code)`,
+       language_code = COALESCE(EXCLUDED.language_code, telegram_users.language_code),
+       last_seen_at  = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`,
     [u.telegram_id, u.workspace_id, u.username ?? null, u.first_name ?? null, u.last_name ?? null, u.language_code ?? null],
   );
   const r = await queryOne<TelegramUser>(

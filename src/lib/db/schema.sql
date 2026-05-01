@@ -89,8 +89,16 @@ CREATE TABLE IF NOT EXISTS telegram_users (
   first_name      TEXT,
   last_name       TEXT,
   language_code   TEXT,
-  created_at      TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+  created_at      TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  last_seen_at    TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
+
+-- Add last_seen_at to existing deployments where the column was missing.
+-- Idempotent — Postgres skips if the column already exists.
+ALTER TABLE telegram_users
+  ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL
+    DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"');
+CREATE INDEX IF NOT EXISTS idx_tg_last_seen ON telegram_users(last_seen_at);
 
 -- One-time link the bot sends so a TG user can claim/sign up for their dashboard.
 CREATE TABLE IF NOT EXISTS telegram_claim_tokens (
