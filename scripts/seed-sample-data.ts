@@ -6,9 +6,10 @@ import { format, subDays } from "date-fns";
 import {
   createTransaction,
   getCategoryByKey,
-  getWorkspace,
   updateWorkspace,
 } from "../src/lib/db/queries";
+import { createWorkspace } from "../src/lib/db/auth-queries";
+import { query } from "../src/lib/db/client";
 
 type Sample = {
   daysAgo: number;
@@ -45,14 +46,17 @@ const SAMPLES: Sample[] = [
 ];
 
 async function main() {
-  const ws = await getWorkspace();
-  if (ws.starting_balance === 0) {
-    await updateWorkspace({ starting_balance: 35_000_000, name: "Sahifa Demo" });
-  }
+  // Pick the most recently-created workspace, or create a brand-new
+  // unclaimed one for demo purposes if the DB is empty.
+  const rows = await query<{ id: string }>("SELECT id FROM workspaces ORDER BY id DESC LIMIT 1");
+  const workspaceId = rows[0] ? Number(rows[0].id) : (await createWorkspace(null, "Sahifa Demo")).id;
+  await updateWorkspace(workspaceId, { starting_balance: 35_000_000, name: "Sahifa Demo" });
+
   for (const s of SAMPLES) {
-    const cat = await getCategoryByKey(s.categoryKey);
+    const cat = await getCategoryByKey(workspaceId, s.categoryKey);
     if (!cat) { console.warn("missing category", s.categoryKey); continue; }
     await createTransaction({
+      workspace_id: workspaceId,
       kind: s.kind,
       amount: s.amount,
       category_id: cat.id,
@@ -61,7 +65,7 @@ async function main() {
       source: "web",
     });
   }
-  console.log(`✓ Inserted ${SAMPLES.length} sample transactions.`);
+  console.log(`✓ Inserted ${SAMPLES.length} sample transactions into workspace ${workspaceId}.`);
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

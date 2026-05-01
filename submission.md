@@ -6,7 +6,6 @@ Telegram bot ==> @business_ledger_bot (https://t.me/business_ledger_bot)
 
 Web dashboard ==> https://cashflow-bot-bice.vercel.app
 
-Screen recording ==> *(record then paste link here)*
 
 ---
 

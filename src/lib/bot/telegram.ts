@@ -16,7 +16,8 @@ import { getTransaction } from "../db/queries";
 import { format, parseISO } from "date-fns";
 import { formatMoney } from "../format";
 import { handleWizardCallback, isWizardState } from "./wizard";
-import { getUserLanguage, setUserLanguage, upsertTelegramUser } from "../db/queries";
+import { getUserLanguage, setUserLanguage } from "../db/queries";
+import { ensureBotContext } from "./per-user";
 import { getChatState } from "./state";
 import type { Lang } from "../db/types";
 
@@ -33,17 +34,19 @@ export function getBot(): Bot {
 }
 
 function registerHandlers(bot: Bot) {
-  bot.command("start",  async (ctx) => { await runMessage(ctx); });
-  bot.command("help",   async (ctx) => { await runMessage(ctx); });
-  bot.command("report", async (ctx) => { await runMessage(ctx); });
-  bot.command("undo",   async (ctx) => { await runMessage(ctx); });
-  bot.command("cancel", async (ctx) => { await runMessage(ctx); });
-  bot.command("lang",   async (ctx) => { await runMessage(ctx); });
+  bot.command("start",      async (ctx) => { await runMessage(ctx); });
+  bot.command("help",       async (ctx) => { await runMessage(ctx); });
+  bot.command("report",     async (ctx) => { await runMessage(ctx); });
+  bot.command("undo",       async (ctx) => { await runMessage(ctx); });
+  bot.command("cancel",     async (ctx) => { await runMessage(ctx); });
+  bot.command("lang",       async (ctx) => { await runMessage(ctx); });
   bot.command("categories", async (ctx) => { await runMessage(ctx); });
-  bot.command("add",    async (ctx) => { await runMessage(ctx); });
-  bot.on(":voice",      async (ctx) => { await runMessage(ctx); });
-  bot.on(":audio",      async (ctx) => { await runMessage(ctx); });
-  bot.on("message:text", async (ctx) => { await runMessage(ctx); });
+  bot.command("add",        async (ctx) => { await runMessage(ctx); });
+  bot.command("dashboard",  async (ctx) => { await runMessage(ctx); });
+  bot.command("reset",      async (ctx) => { await runMessage(ctx); });
+  bot.on(":voice",          async (ctx) => { await runMessage(ctx); });
+  bot.on(":audio",          async (ctx) => { await runMessage(ctx); });
+  bot.on("message:text",    async (ctx) => { await runMessage(ctx); });
   bot.on("callback_query:data", async (ctx) => { await runCallback(ctx); });
   bot.catch((err) => {
     console.error("bot error", err);
@@ -115,7 +118,6 @@ async function runCallback(ctx: Context) {
         link_preview_options: { is_disabled: true },
       });
     }
-    // Show the persistent main menu after picking a language.
     await ctx.reply("👇", { reply_markup: mainMenuKeyboard(lang) }).catch(() => {});
     await ctx.answerCallbackQuery({ text: strings(lang).langChanged }).catch(() => {});
     return;
@@ -127,15 +129,15 @@ async function runCallback(ctx: Context) {
     let parsed: unknown = null;
     try { parsed = state?.pending_intent ? JSON.parse(state.pending_intent) : null; } catch {}
     const wizState = isWizardState(parsed) ? parsed : null;
-    // Make sure the user exists in the DB so foreign-key for telegram_user_id holds.
-    const tgUser = await upsertTelegramUser({
+    // Make sure the user has a workspace before any wizard action runs.
+    const { tgUser, workspace } = await ensureBotContext({
       telegram_id: fromId,
       username: ctx.from?.username,
       first_name: ctx.from?.first_name,
       last_name: ctx.from?.last_name,
       language_code: userLang,
     });
-    const reply = await handleWizardCallback(chatId, data, wizState, tgUser.id);
+    const reply = await handleWizardCallback(chatId, data, wizState, workspace.id, tgUser.id);
     try {
       await ctx.editMessageText(reply.text, {
         parse_mode: "Markdown",
@@ -151,13 +153,18 @@ async function runCallback(ctx: Context) {
     return;
   }
 
-  // Inline delete (immediate, no confirm): `del:<txId>` — used by the
-  // 🗑 button right after a save. The user just saved it on purpose, so
-  // we don't double-prompt.
+  // Inline delete (immediate, no confirm): `del:<txId>`
   const m = data.match(/^del:(\d+)$/);
   if (m) {
     const txId = Number(m[1]);
-    const reply = await deleteByTxId(txId, chatId, userLang);
+    const { workspace } = await ensureBotContext({
+      telegram_id: fromId,
+      username: ctx.from?.username,
+      first_name: ctx.from?.first_name,
+      last_name: ctx.from?.last_name,
+      language_code: userLang,
+    });
+    const reply = await deleteByTxId(workspace.id, txId, chatId, userLang);
     try {
       const original = ctx.callbackQuery!.message?.text ?? "";
       const edited = original ? `~${original}~` : reply.text;
@@ -173,7 +180,14 @@ async function runCallback(ctx: Context) {
   const dcm = data.match(/^delc:(\d+)$/);
   if (dcm) {
     const txId = Number(dcm[1]);
-    const tx = await getTransaction(txId);
+    const { workspace } = await ensureBotContext({
+      telegram_id: fromId,
+      username: ctx.from?.username,
+      first_name: ctx.from?.first_name,
+      last_name: ctx.from?.last_name,
+      language_code: userLang,
+    });
+    const tx = await getTransaction(workspace.id, txId);
     if (!tx) {
       await ctx.answerCallbackQuery({ text: strings(userLang).noLast }).catch(() => {});
       return;
@@ -210,7 +224,14 @@ async function runCallback(ctx: Context) {
   const dcf = data.match(/^delconf:(\d+)$/);
   if (dcf) {
     const txId = Number(dcf[1]);
-    const reply = await deleteByTxId(txId, chatId, userLang);
+    const { workspace } = await ensureBotContext({
+      telegram_id: fromId,
+      username: ctx.from?.username,
+      first_name: ctx.from?.first_name,
+      last_name: ctx.from?.last_name,
+      language_code: userLang,
+    });
+    const reply = await deleteByTxId(workspace.id, txId, chatId, userLang);
     try {
       await ctx.editMessageText(`✅ ${reply.text}`, { parse_mode: "Markdown" });
     } catch {
@@ -221,10 +242,6 @@ async function runCallback(ctx: Context) {
   }
 
   // ── Report picker / navigation ──────────────────────────────────────
-  // rep:menu              → show the period picker again
-  // rep:custom            → ask user to type a date (sets pending state)
-  // rep:<pickerKey>       → render report for that picker selection
-  // rep:nav:<dir>:<navKey>:<refDate> → step ◀/▶ from refDate
   if (data === "rep:menu") {
     const reply = doReportPicker(userLang);
     try {
@@ -257,7 +274,14 @@ async function runCallback(ctx: Context) {
     const navKey = repNav[2] as "day" | "week" | "month" | "ytd";
     const refDate = repNav[3];
     const newRef = navStep(navKey, refDate, dir);
-    const reply = await renderReport({ navKey, refDate: newRef, language: userLang });
+    const { workspace } = await ensureBotContext({
+      telegram_id: fromId,
+      username: ctx.from?.username,
+      first_name: ctx.from?.first_name,
+      last_name: ctx.from?.last_name,
+      language_code: userLang,
+    });
+    const reply = await renderReport({ workspaceId: workspace.id, navKey, refDate: newRef, language: userLang });
     try {
       await ctx.editMessageText(reply.text, {
         parse_mode: "Markdown",
@@ -275,7 +299,14 @@ async function runCallback(ctx: Context) {
   const repPick = data.match(/^rep:(today|yesterday|this_week|last_week|this_month|last_month|ytd)$/);
   if (repPick) {
     const { navKey, refDate } = pickerToNav(repPick[1] as Parameters<typeof pickerToNav>[0]);
-    const reply = await renderReport({ navKey, refDate, language: userLang });
+    const { workspace } = await ensureBotContext({
+      telegram_id: fromId,
+      username: ctx.from?.username,
+      first_name: ctx.from?.first_name,
+      last_name: ctx.from?.last_name,
+      language_code: userLang,
+    });
+    const reply = await renderReport({ workspaceId: workspace.id, navKey, refDate, language: userLang });
     try {
       await ctx.editMessageText(reply.text, {
         parse_mode: "Markdown",
@@ -291,7 +322,7 @@ async function runCallback(ctx: Context) {
     return;
   }
 
-  // Cancel a pending delete (or any "✗ Cancel" outside the wizard).
+  // Cancel a pending delete.
   if (data === "delcancel") {
     const cancelText =
       userLang === "uz" ? "Bekor qilindi."
@@ -309,9 +340,6 @@ async function runCallback(ctx: Context) {
 
 async function sendReply(ctx: Context, reply: BotReply, lang: Lang) {
   const inline = reply.inlineKeyboard ? buildInlineKeyboard(reply.inlineKeyboard) : undefined;
-  // If the reply has its own inline keyboard (a wizard step, a delete confirm,
-  // etc.), use that. Otherwise attach the persistent main-menu reply keyboard
-  // so it stays visible at the bottom of the chat.
   const reply_markup = inline ?? mainMenuKeyboard(lang);
   try {
     await ctx.reply(reply.text, { parse_mode: "Markdown", reply_markup });

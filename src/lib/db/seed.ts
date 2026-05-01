@@ -28,13 +28,13 @@ const DEFAULTS: Seed[] = [
   { key: "other_expense",  kind: "expense", label_uz: "Boshqa",       label_ru: "Прочее",      label_en: "Other",       color: "#64748b", icon: "circle",         sort_order: 90 },
 ];
 
-export async function seedDefaultCategories() {
+export async function seedWorkspaceCategories(workspaceId: number) {
   for (const r of DEFAULTS) {
     await execute(
-      `INSERT INTO categories (key, kind, label_uz, label_ru, label_en, color, icon, sort_order, is_system)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
-       ON CONFLICT (key) DO NOTHING`,
-      [r.key, r.kind, r.label_uz, r.label_ru, r.label_en, r.color, r.icon, r.sort_order],
+      `INSERT INTO categories (workspace_id, key, kind, label_uz, label_ru, label_en, color, icon, sort_order, is_system)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+       ON CONFLICT (workspace_id, key) DO NOTHING`,
+      [workspaceId, r.key, r.kind, r.label_uz, r.label_ru, r.label_en, r.color, r.icon, r.sort_order],
     );
   }
 }

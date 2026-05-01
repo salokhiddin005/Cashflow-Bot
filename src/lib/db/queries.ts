@@ -15,14 +15,28 @@ import type {
 const toNum = (v: unknown): number => (typeof v === "string" ? Number(v) : (v as number));
 
 function fixCategory(r: Category): Category {
-  return { ...r, is_archived: toNum(r.is_archived) as 0 | 1, is_system: toNum(r.is_system) as 0 | 1, sort_order: toNum(r.sort_order) };
+  return {
+    ...r,
+    id: toNum(r.id),
+    workspace_id: toNum(r.workspace_id),
+    is_archived: toNum(r.is_archived) as 0 | 1,
+    is_system: toNum(r.is_system) as 0 | 1,
+    sort_order: toNum(r.sort_order),
+  };
 }
 function fixWorkspace(r: Workspace): Workspace {
-  return { ...r, starting_balance: toNum(r.starting_balance) };
+  return {
+    ...r,
+    id: toNum(r.id),
+    user_id: r.user_id == null ? null : toNum(r.user_id),
+    starting_balance: toNum(r.starting_balance),
+  };
 }
 function fixTransaction(r: TransactionWithCategory): TransactionWithCategory {
   return {
     ...r,
+    id: toNum(r.id),
+    workspace_id: toNum(r.workspace_id),
     amount: toNum(r.amount),
     original_amount: r.original_amount == null ? null : toNum(r.original_amount),
     fx_rate: r.fx_rate == null ? null : Number(r.fx_rate),
@@ -32,48 +46,61 @@ function fixTransaction(r: TransactionWithCategory): TransactionWithCategory {
 }
 
 // ───────── Workspace ─────────
-export async function getWorkspace(): Promise<Workspace> {
-  const r = await queryOne<Workspace>("SELECT * FROM workspace WHERE id = 1");
-  return fixWorkspace(r!);
+export async function getWorkspace(workspaceId: number): Promise<Workspace> {
+  const r = await queryOne<Workspace>("SELECT * FROM workspaces WHERE id = $1", [workspaceId]);
+  if (!r) throw new Error(`Workspace ${workspaceId} not found`);
+  return fixWorkspace(r);
 }
 
-export async function updateWorkspace(patch: Partial<Pick<Workspace, "name" | "base_currency" | "starting_balance" | "starting_balance_at" | "timezone">>) {
-  const cur = await getWorkspace();
+export async function updateWorkspace(
+  workspaceId: number,
+  patch: Partial<Pick<Workspace, "name" | "base_currency" | "starting_balance" | "starting_balance_at" | "timezone">>,
+): Promise<Workspace> {
+  const cur = await getWorkspace(workspaceId);
   const next = { ...cur, ...patch };
   await execute(
-    `UPDATE workspace SET name=$1, base_currency=$2, starting_balance=$3,
-      starting_balance_at=$4, timezone=$5 WHERE id = 1`,
-    [next.name, next.base_currency, next.starting_balance, next.starting_balance_at, next.timezone],
+    `UPDATE workspaces SET name=$1, base_currency=$2, starting_balance=$3,
+      starting_balance_at=$4, timezone=$5 WHERE id = $6`,
+    [next.name, next.base_currency, next.starting_balance, next.starting_balance_at, next.timezone, workspaceId],
   );
   return next;
 }
 
 // ───────── Categories ─────────
-export async function listCategories(opts: { kind?: Kind; includeArchived?: boolean } = {}): Promise<Category[]> {
-  const where: string[] = [];
-  const params: unknown[] = [];
+export async function listCategories(
+  workspaceId: number,
+  opts: { kind?: Kind; includeArchived?: boolean } = {},
+): Promise<Category[]> {
+  const where: string[] = ["workspace_id = $1"];
+  const params: unknown[] = [workspaceId];
   if (opts.kind) {
     params.push(opts.kind);
     where.push(`kind = $${params.length}`);
   }
   if (!opts.includeArchived) where.push("is_archived = 0");
-  const sql = `SELECT * FROM categories ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY kind, sort_order, label_en`;
+  const sql = `SELECT * FROM categories WHERE ${where.join(" AND ")} ORDER BY kind, sort_order, label_en`;
   const rows = await query<Category>(sql, params);
   return rows.map(fixCategory);
 }
 
-export async function getCategoryByKey(key: string): Promise<Category | undefined> {
-  const r = await queryOne<Category>("SELECT * FROM categories WHERE key = $1", [key]);
+export async function getCategoryByKey(workspaceId: number, key: string): Promise<Category | undefined> {
+  const r = await queryOne<Category>(
+    "SELECT * FROM categories WHERE workspace_id = $1 AND key = $2",
+    [workspaceId, key],
+  );
   return r ? fixCategory(r) : undefined;
 }
 
-export async function getCategoryById(id: number): Promise<Category | undefined> {
-  const r = await queryOne<Category>("SELECT * FROM categories WHERE id = $1", [id]);
+export async function getCategoryById(workspaceId: number, id: number): Promise<Category | undefined> {
+  const r = await queryOne<Category>(
+    "SELECT * FROM categories WHERE id = $1 AND workspace_id = $2",
+    [id, workspaceId],
+  );
   return r ? fixCategory(r) : undefined;
 }
 
-// Generate a unique snake_case key from a free-form name.
-export async function generateUniqueCategoryKey(name: string): Promise<string> {
+// Generate a unique snake_case key from a free-form name, scoped to a workspace.
+export async function generateUniqueCategoryKey(workspaceId: number, name: string): Promise<string> {
   const base = name
     .toLowerCase()
     .normalize("NFKD")
@@ -83,7 +110,7 @@ export async function generateUniqueCategoryKey(name: string): Promise<string> {
     .slice(0, 30) || "custom";
   let candidate = base;
   let n = 2;
-  while (await getCategoryByKey(candidate)) {
+  while (await getCategoryByKey(workspaceId, candidate)) {
     candidate = `${base}_${n++}`;
     if (n > 99) throw new Error("Could not generate a unique category key");
   }
@@ -91,6 +118,7 @@ export async function generateUniqueCategoryKey(name: string): Promise<string> {
 }
 
 export async function createCategory(input: {
+  workspace_id: number;
   key: string;
   kind: Kind;
   label_uz: string;
@@ -100,65 +128,98 @@ export async function createCategory(input: {
   icon?: string;
 }): Promise<Category> {
   const r = await queryOne<Category>(
-    `INSERT INTO categories (key, kind, label_uz, label_ru, label_en, color, icon)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO categories (workspace_id, key, kind, label_uz, label_ru, label_en, color, icon)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [input.key, input.kind, input.label_uz, input.label_ru, input.label_en, input.color ?? "#64748b", input.icon ?? "circle"],
+    [input.workspace_id, input.key, input.kind, input.label_uz, input.label_ru, input.label_en, input.color ?? "#64748b", input.icon ?? "circle"],
   );
   return fixCategory(r!);
 }
 
-export async function updateCategory(id: number, patch: Partial<Pick<Category, "label_uz" | "label_ru" | "label_en" | "color" | "icon" | "is_archived" | "sort_order">>): Promise<Category> {
-  const cur = await getCategoryById(id);
+export async function updateCategory(
+  workspaceId: number,
+  id: number,
+  patch: Partial<Pick<Category, "label_uz" | "label_ru" | "label_en" | "color" | "icon" | "is_archived" | "sort_order">>,
+): Promise<Category> {
+  const cur = await getCategoryById(workspaceId, id);
   if (!cur) throw new Error("Category not found");
   const next = { ...cur, ...patch };
   await execute(
     `UPDATE categories SET label_uz=$1, label_ru=$2, label_en=$3,
-      color=$4, icon=$5, is_archived=$6, sort_order=$7 WHERE id = $8`,
-    [next.label_uz, next.label_ru, next.label_en, next.color, next.icon, next.is_archived, next.sort_order, id],
+      color=$4, icon=$5, is_archived=$6, sort_order=$7 WHERE id = $8 AND workspace_id = $9`,
+    [next.label_uz, next.label_ru, next.label_en, next.color, next.icon, next.is_archived, next.sort_order, id, workspaceId],
   );
-  return (await getCategoryById(id))!;
+  return (await getCategoryById(workspaceId, id))!;
 }
 
-export async function deleteCategory(id: number): Promise<void> {
-  const cur = await getCategoryById(id);
+export async function deleteCategory(workspaceId: number, id: number): Promise<void> {
+  const cur = await getCategoryById(workspaceId, id);
   if (!cur) return;
   if (cur.is_system) {
-    await updateCategory(id, { is_archived: 1 });
+    await updateCategory(workspaceId, id, { is_archived: 1 });
     return;
   }
   // Refuse hard-delete if any transactions reference it; archive instead.
-  const used = await queryOne("SELECT 1 AS x FROM transactions WHERE category_id = $1 LIMIT 1", [id]);
+  const used = await queryOne(
+    "SELECT 1 AS x FROM transactions WHERE category_id = $1 AND workspace_id = $2 LIMIT 1",
+    [id, workspaceId],
+  );
   if (used) {
-    await updateCategory(id, { is_archived: 1 });
+    await updateCategory(workspaceId, id, { is_archived: 1 });
     return;
   }
-  await execute("DELETE FROM categories WHERE id = $1", [id]);
+  await execute("DELETE FROM categories WHERE id = $1 AND workspace_id = $2", [id, workspaceId]);
 }
 
 // ───────── Telegram users ─────────
 export async function upsertTelegramUser(u: {
   telegram_id: number;
+  workspace_id: number;
   username?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   language_code?: string | null;
 }): Promise<TelegramUser> {
   await execute(
-    `INSERT INTO telegram_users (telegram_id, username, first_name, last_name, language_code)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO telegram_users (telegram_id, workspace_id, username, first_name, last_name, language_code)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (telegram_id) DO UPDATE SET
        username      = EXCLUDED.username,
        first_name    = EXCLUDED.first_name,
        last_name     = EXCLUDED.last_name,
        language_code = COALESCE(EXCLUDED.language_code, telegram_users.language_code)`,
-    [u.telegram_id, u.username ?? null, u.first_name ?? null, u.last_name ?? null, u.language_code ?? null],
+    [u.telegram_id, u.workspace_id, u.username ?? null, u.first_name ?? null, u.last_name ?? null, u.language_code ?? null],
   );
   const r = await queryOne<TelegramUser>(
     "SELECT * FROM telegram_users WHERE telegram_id = $1",
     [u.telegram_id],
   );
-  return { ...r!, id: toNum(r!.id), telegram_id: toNum(r!.telegram_id) };
+  return {
+    ...r!,
+    id: toNum(r!.id),
+    telegram_id: toNum(r!.telegram_id),
+    workspace_id: toNum(r!.workspace_id),
+    user_id: r!.user_id == null ? null : toNum(r!.user_id),
+  };
+}
+
+export async function getTelegramUserByTelegramId(telegramId: number): Promise<TelegramUser | undefined> {
+  const r = await queryOne<TelegramUser>(
+    "SELECT * FROM telegram_users WHERE telegram_id = $1",
+    [telegramId],
+  );
+  if (!r) return undefined;
+  return {
+    ...r,
+    id: toNum(r.id),
+    telegram_id: toNum(r.telegram_id),
+    workspace_id: toNum(r.workspace_id),
+    user_id: r.user_id == null ? null : toNum(r.user_id),
+  };
+}
+
+export async function setTelegramUserOwner(telegramUserId: number, userId: number): Promise<void> {
+  await execute("UPDATE telegram_users SET user_id = $1 WHERE id = $2", [userId, telegramUserId]);
 }
 
 export async function setUserLanguage(telegram_id: number, lang: "uz" | "ru" | "en"): Promise<void> {
@@ -189,6 +250,7 @@ const TX_SELECT = `
 `;
 
 export async function createTransaction(input: {
+  workspace_id: number;
   kind: Kind;
   amount: number;
   currency?: string;
@@ -203,10 +265,11 @@ export async function createTransaction(input: {
 }): Promise<TransactionWithCategory> {
   const r = await queryOne<{ id: number }>(
     `INSERT INTO transactions
-     (kind, amount, currency, original_amount, original_currency, fx_rate, category_id, occurred_on, note, source, telegram_user_id)
-     VALUES ($1, $2, COALESCE($3, 'UZS'), $4, $5, $6, $7, $8, $9, COALESCE($10, 'web'), $11)
+     (workspace_id, kind, amount, currency, original_amount, original_currency, fx_rate, category_id, occurred_on, note, source, telegram_user_id)
+     VALUES ($1, $2, $3, COALESCE($4, 'UZS'), $5, $6, $7, $8, $9, $10, COALESCE($11, 'web'), $12)
      RETURNING id`,
     [
+      input.workspace_id,
       input.kind,
       input.amount,
       input.currency ?? null,
@@ -220,11 +283,14 @@ export async function createTransaction(input: {
       input.telegram_user_id ?? null,
     ],
   );
-  return (await getTransaction(toNum(r!.id)))!;
+  return (await getTransaction(input.workspace_id, toNum(r!.id)))!;
 }
 
-export async function getTransaction(id: number): Promise<TransactionWithCategory | undefined> {
-  const r = await queryOne<TransactionWithCategory>(`${TX_SELECT} WHERE t.id = $1`, [id]);
+export async function getTransaction(workspaceId: number, id: number): Promise<TransactionWithCategory | undefined> {
+  const r = await queryOne<TransactionWithCategory>(
+    `${TX_SELECT} WHERE t.id = $1 AND t.workspace_id = $2`,
+    [id, workspaceId],
+  );
   return r ? fixTransaction(r) : undefined;
 }
 
@@ -238,9 +304,9 @@ export type TxFilter = {
   offset?: number;
 };
 
-function buildTxWhere(f: TxFilter): { where: string; params: unknown[] } {
-  const where: string[] = [];
-  const params: unknown[] = [];
+function buildTxWhere(workspaceId: number, f: TxFilter): { where: string; params: unknown[] } {
+  const where: string[] = ["t.workspace_id = $1"];
+  const params: unknown[] = [workspaceId];
   if (f.from) { params.push(f.from);       where.push(`t.occurred_on >= $${params.length}`); }
   if (f.to)   { params.push(f.to);         where.push(`t.occurred_on <= $${params.length}`); }
   if (f.kind) { params.push(f.kind);       where.push(`t.kind = $${params.length}`); }
@@ -250,11 +316,11 @@ function buildTxWhere(f: TxFilter): { where: string; params: unknown[] } {
     const i = params.length;
     where.push(`(t.note ILIKE $${i} OR c.label_en ILIKE $${i} OR c.label_uz ILIKE $${i} OR c.label_ru ILIKE $${i})`);
   }
-  return { where: where.length ? "WHERE " + where.join(" AND ") : "", params };
+  return { where: "WHERE " + where.join(" AND "), params };
 }
 
-export async function listTransactions(f: TxFilter = {}): Promise<TransactionWithCategory[]> {
-  const { where, params } = buildTxWhere(f);
+export async function listTransactions(workspaceId: number, f: TxFilter = {}): Promise<TransactionWithCategory[]> {
+  const { where, params } = buildTxWhere(workspaceId, f);
   const limit  = Math.min(Math.max(f.limit ?? 100, 1), 500);
   const offset = Math.max(f.offset ?? 0, 0);
   params.push(limit);  const limitIdx = params.length;
@@ -264,8 +330,8 @@ export async function listTransactions(f: TxFilter = {}): Promise<TransactionWit
   return rows.map(fixTransaction);
 }
 
-export async function countTransactions(f: TxFilter = {}): Promise<number> {
-  const { where, params } = buildTxWhere(f);
+export async function countTransactions(workspaceId: number, f: TxFilter = {}): Promise<number> {
+  const { where, params } = buildTxWhere(workspaceId, f);
   const r = await queryOne<{ n: string }>(
     `SELECT COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id ${where}`,
     params,
@@ -274,69 +340,71 @@ export async function countTransactions(f: TxFilter = {}): Promise<number> {
 }
 
 export async function updateTransaction(
+  workspaceId: number,
   id: number,
   patch: Partial<Pick<Transaction, "kind" | "amount" | "currency" | "original_amount" | "original_currency" | "fx_rate" | "category_id" | "occurred_on" | "note">>,
 ): Promise<TransactionWithCategory> {
-  const cur = await getTransaction(id);
+  const cur = await getTransaction(workspaceId, id);
   if (!cur) throw new Error("Transaction not found");
   const next = { ...cur, ...patch };
   await execute(
     `UPDATE transactions SET kind=$1, amount=$2, currency=$3,
       original_amount=$4, original_currency=$5, fx_rate=$6,
       category_id=$7, occurred_on=$8, note=$9,
-      updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') WHERE id=$10`,
+      updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+     WHERE id=$10 AND workspace_id=$11`,
     [
       next.kind, next.amount, next.currency,
       next.original_amount, next.original_currency, next.fx_rate,
       next.category_id, next.occurred_on, next.note,
-      id,
+      id, workspaceId,
     ],
   );
-  return (await getTransaction(id))!;
+  return (await getTransaction(workspaceId, id))!;
 }
 
-export async function deleteTransaction(id: number): Promise<void> {
-  await execute("DELETE FROM transactions WHERE id = $1", [id]);
+export async function deleteTransaction(workspaceId: number, id: number): Promise<void> {
+  await execute("DELETE FROM transactions WHERE id = $1 AND workspace_id = $2", [id, workspaceId]);
 }
 
 // ───────── Aggregates ─────────
 export type Totals = { income: number; expense: number; net: number; count: number };
 
-export async function totalsBetween(from: string, to: string): Promise<Totals> {
+export async function totalsBetween(workspaceId: number, from: string, to: string): Promise<Totals> {
   const r = await queryOne<{ income: string; expense: string; count: string }>(
     `SELECT
       COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0) AS income,
       COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS expense,
       COUNT(*) AS count
-     FROM transactions WHERE occurred_on BETWEEN $1 AND $2`,
-    [from, to],
+     FROM transactions WHERE workspace_id = $1 AND occurred_on BETWEEN $2 AND $3`,
+    [workspaceId, from, to],
   );
   const income = toNum(r!.income);
   const expense = toNum(r!.expense);
   return { income, expense, net: income - expense, count: toNum(r!.count) };
 }
 
-export async function categoryTotalBetween(categoryId: number, from: string, to: string): Promise<{ total: number; count: number }> {
+export async function categoryTotalBetween(workspaceId: number, categoryId: number, from: string, to: string): Promise<{ total: number; count: number }> {
   const r = await queryOne<{ total: string; count: string }>(
     `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
-     FROM transactions WHERE category_id = $1 AND occurred_on BETWEEN $2 AND $3`,
-    [categoryId, from, to],
+     FROM transactions WHERE workspace_id = $1 AND category_id = $2 AND occurred_on BETWEEN $3 AND $4`,
+    [workspaceId, categoryId, from, to],
   );
   return { total: toNum(r!.total), count: toNum(r!.count) };
 }
 
 export type DailySeriesPoint = { day: string; income: number; expense: number };
 
-export async function dailySeries(from: string, to: string): Promise<DailySeriesPoint[]> {
+export async function dailySeries(workspaceId: number, from: string, to: string): Promise<DailySeriesPoint[]> {
   const rows = await query<{ day: string; income: string; expense: string }>(
     `SELECT occurred_on AS day,
        COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0) AS income,
        COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS expense
      FROM transactions
-     WHERE occurred_on BETWEEN $1 AND $2
+     WHERE workspace_id = $1 AND occurred_on BETWEEN $2 AND $3
      GROUP BY occurred_on
      ORDER BY occurred_on ASC`,
-    [from, to],
+    [workspaceId, from, to],
   );
   return rows.map((r) => ({ day: r.day, income: toNum(r.income), expense: toNum(r.expense) }));
 }
@@ -350,17 +418,17 @@ export type CategoryBreakdownRow = {
   share: number;
 };
 
-export async function categoryBreakdown(kind: Kind, from: string, to: string): Promise<CategoryBreakdownRow[]> {
+export async function categoryBreakdown(workspaceId: number, kind: Kind, from: string, to: string): Promise<CategoryBreakdownRow[]> {
   const rows = await query<{ category_id: number; key: string; label_en: string; color: string; total: string }>(
     `SELECT c.id AS category_id, c.key, c.label_en, c.color,
             COALESCE(SUM(t.amount), 0) AS total
      FROM categories c
-     LEFT JOIN transactions t ON t.category_id = c.id AND t.kind = $1 AND t.occurred_on BETWEEN $2 AND $3
-     WHERE c.kind = $1
+     LEFT JOIN transactions t ON t.category_id = c.id AND t.kind = $1 AND t.occurred_on BETWEEN $2 AND $3 AND t.workspace_id = $4
+     WHERE c.kind = $1 AND c.workspace_id = $4
      GROUP BY c.id
      HAVING COALESCE(SUM(t.amount), 0) > 0
      ORDER BY total DESC`,
-    [kind, from, to],
+    [kind, from, to, workspaceId],
   );
   const normalized = rows.map((r) => ({
     category_id: toNum(r.category_id),
@@ -374,17 +442,17 @@ export async function categoryBreakdown(kind: Kind, from: string, to: string): P
 }
 
 // Net-worth-style cumulative balance series (starting balance + cumulative net).
-export async function balanceSeries(from: string, to: string): Promise<{ day: string; balance: number }[]> {
-  const ws = await getWorkspace();
+export async function balanceSeries(workspaceId: number, from: string, to: string): Promise<{ day: string; balance: number }[]> {
+  const ws = await getWorkspace(workspaceId);
   const before = await queryOne<{ net: string }>(
     `SELECT COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0)
           - COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS net
-     FROM transactions WHERE occurred_on < $1`,
-    [from],
+     FROM transactions WHERE workspace_id = $1 AND occurred_on < $2`,
+    [workspaceId, from],
   );
   const startBalance = ws.starting_balance + toNum(before!.net);
 
-  const series = await dailySeries(from, to);
+  const series = await dailySeries(workspaceId, from, to);
   let running = startBalance;
   return series.map((p) => {
     running += p.income - p.expense;

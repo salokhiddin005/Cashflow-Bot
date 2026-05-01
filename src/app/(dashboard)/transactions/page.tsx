@@ -10,6 +10,7 @@ import {
   type TxFilter,
 } from "@/lib/db/queries";
 import { findAnomalies } from "@/lib/insights";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { formatMoney } from "@/lib/format";
 import { ListTree } from "lucide-react";
 
@@ -32,6 +33,7 @@ export default async function TransactionsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const { workspace } = await requireUserWorkspace();
   const sp = await searchParams;
   const flat = Object.fromEntries(
     Object.entries(sp).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]),
@@ -51,12 +53,12 @@ export default async function TransactionsPage({
   };
 
   const [categories, txs, total] = await Promise.all([
-    listCategories({ includeArchived: true }),
-    listTransactions(filter),
-    countTransactions({ ...filter, limit: undefined, offset: undefined }),
+    listCategories(workspace.id, { includeArchived: true }),
+    listTransactions(workspace.id, filter),
+    countTransactions(workspace.id, { ...filter, limit: undefined, offset: undefined }),
   ]);
 
-  const anomalies = await findAnomalies(txs.map((t) => t.id));
+  const anomalies = await findAnomalies(workspace.id, txs.map((t) => t.id));
 
   const filteredTotals = txs.reduce(
     (acc, t) => {

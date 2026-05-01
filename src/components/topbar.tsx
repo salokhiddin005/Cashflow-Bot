@@ -1,15 +1,34 @@
-import { getWorkspace } from "@/lib/db/queries";
+import { LogOut } from "lucide-react";
 import { TelegramHelpButton } from "./telegram-help";
+import { getCurrentUserAndWorkspace } from "@/lib/auth/session";
+import { logoutAction } from "@/app/actions";
 
 export async function Topbar() {
-  const ws = await getWorkspace();
+  const ctx = await getCurrentUserAndWorkspace();
+  if (!ctx) return null;
+  const { user, workspace } = ctx;
+  const identity = user.email ?? user.phone ?? (user.tg_username ? `@${user.tg_username}` : "Account");
+
   return (
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-[--color-border] bg-[--color-background]/85 px-6 backdrop-blur lg:px-10">
       <div className="flex items-center gap-3 text-sm">
         <span className="text-[--color-muted]">Workspace</span>
-        <span className="rounded-md bg-[--color-surface-2] px-2 py-1 text-[13px] font-medium">{ws.name}</span>
+        <span className="rounded-md bg-[--color-surface-2] px-2 py-1 text-[13px] font-medium">{workspace.name}</span>
       </div>
-      <TelegramHelpButton />
+      <div className="flex items-center gap-3">
+        <TelegramHelpButton />
+        <span className="hidden text-[12.5px] text-[--color-muted] sm:inline">{identity}</span>
+        <form action={logoutAction}>
+          <button
+            type="submit"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[--color-border] bg-[--color-surface] px-2.5 text-[12.5px] font-medium hover:bg-[--color-surface-2]"
+            title="Sign out"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Sign out</span>
+          </button>
+        </form>
+      </div>
     </header>
   );
 }

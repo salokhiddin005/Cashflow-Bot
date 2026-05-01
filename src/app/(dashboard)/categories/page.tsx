@@ -1,16 +1,15 @@
 import { PageHeader, Card, CardBody, CardHeader } from "@/components/ui";
 import { CategoryManager } from "@/components/category-manager";
 import { WorkspaceForm } from "@/components/workspace-form";
-import { getWorkspace, listCategories } from "@/lib/db/queries";
+import { listCategories } from "@/lib/db/queries";
+import { requireUserWorkspace } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function CategoriesPage() {
-  const [categories, workspace] = await Promise.all([
-    listCategories({ includeArchived: true }),
-    getWorkspace(),
-  ]);
+  const { workspace } = await requireUserWorkspace();
+  const categories = await listCategories(workspace.id, { includeArchived: true });
   return (
     <div className="space-y-6">
       <PageHeader

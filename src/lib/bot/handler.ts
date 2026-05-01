@@ -14,7 +14,6 @@ import {
   listTransactions,
   setUserLanguage,
   totalsBetween,
-  upsertTelegramUser,
   updateTransaction,
 } from "../db/queries";
 import { computeRunway } from "../insights";
@@ -24,6 +23,9 @@ import { formatMoney } from "../format";
 import { transcribeAudio } from "./voice";
 import { parseIntent, type LogIntent, type ParsedIntent } from "./intent";
 import { getChatState, setLastTransaction, setPendingIntent } from "./state";
+import { ensureBotContext, getDashboardUrlForBotUser } from "./per-user";
+import { newToken, tokenExpiry } from "../auth/tokens";
+import { createPasswordResetToken } from "../db/auth-queries";
 import {
   matchMenuTap,
   recentDeleteButtonsInline,
@@ -41,7 +43,7 @@ import {
   strings,
   welcomeMessage,
 } from "./welcome";
-import type { Lang } from "../db/types";
+import type { Lang, TelegramUser } from "../db/types";
 
 export type IncomingMessage = {
   chat_id: number;
@@ -56,12 +58,9 @@ export type BotReply = {
   inlineKeyboard?: InlineButton[][];
 };
 
-const _RAW_URL = (process.env.APP_BASE_URL?.trim() || "").replace(/\/$/, "");
-// Telegram inline URL buttons must be HTTPS — drop the link in local dev.
-const DASHBOARD_URL: string | null = /^https:\/\//.test(_RAW_URL) ? _RAW_URL : null;
-
-function dashboardButton(label: string): InlineButton[] {
-  return DASHBOARD_URL ? [{ text: label, url: DASHBOARD_URL }] : [];
+async function dashboardButton(tgUser: TelegramUser, label: string): Promise<InlineButton[]> {
+  const url = await getDashboardUrlForBotUser(tgUser);
+  return url ? [{ text: label, url }] : [];
 }
 
 export function languagePickerReply(): BotReply {
@@ -72,16 +71,17 @@ export function languagePickerReply(): BotReply {
 }
 
 export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
-  // Persist user as soon as we see them — even if processing fails later.
-  // Don't overwrite a saved language preference with the Telegram default.
+  // Ensure the TG user exists, has a workspace, and is up-to-date. This is
+  // the only entry point that creates workspaces for new bot users.
   const savedLang = await getUserLanguage(msg.user.telegram_id);
-  const tgUser = await upsertTelegramUser({
+  const { tgUser, workspace } = await ensureBotContext({
     telegram_id: msg.user.telegram_id,
-    username: msg.user.username ?? null,
-    first_name: msg.user.first_name ?? null,
-    last_name: msg.user.last_name ?? null,
+    username: msg.user.username,
+    first_name: msg.user.first_name,
+    last_name: msg.user.last_name,
     language_code: savedLang ?? mapTelegramLang(msg.user.language_code),
   });
+  const workspaceId = workspace.id;
 
   // Resolve the user's preferred language: explicit DB choice > Telegram app
   // language > English fallback. The LLM can still detect per-message language
@@ -104,49 +104,43 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
   }
 
   // ── Multi-turn flows take precedence ─────────────────────────────────
-  // If we're in the middle of a wizard (e.g. add-transaction step-by-step)
-  // or waiting on a custom report date, route this text message through
-  // the appropriate handler before anything else.
   const earlyState = await getChatState(msg.chat_id);
   if (earlyState?.pending_intent) {
     try {
       const pending = JSON.parse(earlyState.pending_intent);
-      // Allow /cancel to bail out of any pending state.
       if (/^\/cancel\b/i.test(text) || /^cancel$/i.test(text)) {
         setPendingIntent(msg.chat_id, null);
       } else if (isWizardState(pending)) {
-        return handleWizardText(msg.chat_id, text, pending as WizardState, tgUser.id);
+        return handleWizardText(msg.chat_id, text, pending as WizardState, workspaceId, tgUser.id);
       } else if (pending?.type === "report_date_input") {
         setPendingIntent(msg.chat_id, null);
         const trimmed = text.trim();
         if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-          // Re-arm and ask again with a clearer hint.
           setPendingIntent(msg.chat_id, { type: "report_date_input" });
           return { text: invalidDateMessage(userLang) };
         }
-        return renderReport({ navKey: "day", refDate: trimmed, language: userLang });
+        return renderReport({ workspaceId, navKey: "day", refDate: trimmed, language: userLang });
       }
     } catch {
-      // Bad JSON in pending — clear it.
       setPendingIntent(msg.chat_id, null);
     }
   }
 
-  // ── Persistent menu button taps (translated to actions) ──────────────
+  // ── Persistent menu button taps ──────────────
   const menuAction = matchMenuTap(text);
   if (menuAction === "add")        return startLogWizard(msg.chat_id, userLang);
   if (menuAction === "report")     return doReportPicker(userLang);
-  if (menuAction === "recent")     return doListRecent(userLang);
-  if (menuAction === "categories") return doListCategories(userLang);
-  if (menuAction === "help")       return { text: helpMessage(userLang) };
+  if (menuAction === "recent")     return doListRecent(workspaceId, userLang);
+  if (menuAction === "categories") return doListCategories(workspaceId, userLang);
+  if (menuAction === "help")       return { text: helpMessage(userLang), inlineKeyboard: [await dashboardButton(tgUser, strings(userLang).whatNext.dashboard)] };
 
-  // Built-in commands handled without an LLM call (faster, free, predictable).
-  // /start: first-timers (no saved lang) get the language picker; returning
-  // users get a friendly welcome in their chosen language. /lang always shows
-  // the picker so they can switch.
+  // Built-in commands handled without an LLM call.
   if (/^\/start\b/i.test(text)) {
     if (!savedLang) return languagePickerReply();
-    return { text: welcomeMessage(userLang) };
+    return {
+      text: welcomeMessage(userLang),
+      inlineKeyboard: [await dashboardButton(tgUser, strings(userLang).whatNext.dashboard)],
+    };
   }
   if (/^\/add\b/i.test(text)) {
     return startLogWizard(msg.chat_id, userLang);
@@ -155,24 +149,28 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
     return languagePickerReply();
   }
   if (/^\/help\b/i.test(text)) {
-    return { text: helpMessage(userLang) };
+    return { text: helpMessage(userLang), inlineKeyboard: [await dashboardButton(tgUser, strings(userLang).whatNext.dashboard)] };
+  }
+  if (/^\/dashboard\b/i.test(text)) {
+    return doDashboard(tgUser, userLang);
+  }
+  if (/^\/reset\b/i.test(text)) {
+    return doResetViaBot(tgUser, userLang);
   }
   if (/^\/report\b/i.test(text)) {
     return doReportPicker(userLang);
   }
   if (/^\/undo\b/i.test(text) || /^\/cancel\b/i.test(text)) {
-    return doDeleteLast({ language: userLang }, msg.chat_id);
+    return doDeleteLast(workspaceId, { language: userLang }, msg.chat_id);
   }
   if (/^\/categories\b/i.test(text) || /^\/categs\b/i.test(text)) {
-    return doListCategories(userLang);
+    return doListCategories(workspaceId, userLang);
   }
 
-  const categories = await listCategories({ includeArchived: false });
+  const categories = await listCategories(workspaceId, { includeArchived: false });
   const state = await getChatState(msg.chat_id);
 
-  // Multi-turn flow: if the bot was waiting for a follow-up (e.g. "income or
-  // expense?" after a create_category request), try to complete that intent
-  // before re-asking the LLM. Avoids losing context across turns.
+  // Multi-turn: completing a pending create_category from the previous turn.
   if (state?.pending_intent) {
     try {
       const pending = JSON.parse(state.pending_intent) as { type?: string } & Record<string, unknown>;
@@ -180,7 +178,7 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
         const kind = parseKindFromText(text);
         if (kind) {
           setPendingIntent(msg.chat_id, null);
-          return doCreateCategory({
+          return doCreateCategory(workspaceId, {
             type: "create_category",
             label_en: String(pending.label_en ?? text),
             label_uz: String(pending.label_uz ?? text),
@@ -191,7 +189,6 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
             followup_question: null,
           }, msg.chat_id);
         }
-        // User said something else — abandon the pending state and process normally.
         setPendingIntent(msg.chat_id, null);
       }
     } catch {
@@ -207,9 +204,8 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
   } catch (e) {
     console.error("intent parse failed", e);
     const lang = detectLanguage(text) || userLang;
-    // Surface rate-limit errors clearly (Gemini free tier has per-minute caps).
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    if (/429|RESOURCE_EXHAUSTED|quota/i.test(errMsg)) {
       return { text: rateLimitedMessage(lang) };
     }
     return { text: strings(lang).cantParse };
@@ -220,68 +216,66 @@ export async function handleIncoming(msg: IncomingMessage): Promise<BotReply> {
       return { text: parsed.reply };
 
     case "log":
-      return await doLog(parsed, msg.chat_id, tgUser.id);
+      return await doLog(workspaceId, tgUser, parsed, msg.chat_id);
 
     case "report":
-      return await doReport(parsed);
+      return await doReport(workspaceId, parsed);
 
     case "edit_last":
-      return await doEditLast(parsed, msg.chat_id);
+      return await doEditLast(workspaceId, parsed, msg.chat_id);
 
     case "delete_last":
-      return await doDeleteLast(parsed, msg.chat_id);
+      return await doDeleteLast(workspaceId, parsed, msg.chat_id);
 
     case "create_category":
-      return await doCreateCategory(parsed, msg.chat_id);
+      return await doCreateCategory(workspaceId, parsed, msg.chat_id);
 
     case "delete_category":
-      return await doDeleteCategory(parsed);
+      return await doDeleteCategory(workspaceId, parsed);
 
     case "show_picker":
       return doReportPicker(parsed.language);
 
     case "show_recent":
-      return await doListRecent(parsed.language);
+      return await doListRecent(workspaceId, parsed.language);
 
     case "change_language":
       return await doChangeLanguage(parsed.target_language, msg.user.telegram_id);
   }
 }
 
-async function doLog(intent: LogIntent, chatId: number, telegramUserId: number): Promise<BotReply> {
+async function doLog(workspaceId: number, tgUser: TelegramUser, intent: LogIntent, chatId: number): Promise<BotReply> {
   if (intent.followup_question) {
-    // Don't save — bot is asking for clarification.
     return { text: intent.followup_question };
   }
 
-  // Amount is required to save. If LLM didn't extract one, ask for it.
   if (intent.amount == null || intent.amount <= 0) {
     return { text: askForAmount(intent.language, intent.kind) };
   }
 
   const cat = intent.category_key
-    ? await getCategoryByKey(intent.category_key)
-    : await getCategoryByKey(intent.kind === "income" ? "other_income" : "other_expense");
+    ? await getCategoryByKey(workspaceId, intent.category_key)
+    : await getCategoryByKey(workspaceId, intent.kind === "income" ? "other_income" : "other_expense");
 
   const category =
-    cat ?? (await getCategoryByKey(intent.kind === "income" ? "other_income" : "other_expense"));
+    cat ?? (await getCategoryByKey(workspaceId, intent.kind === "income" ? "other_income" : "other_expense"));
 
   if (!category || category.kind !== intent.kind) {
     return { text: strings(intent.language).cantUnderstand };
   }
 
   const tx = await createTransaction({
+    workspace_id: workspaceId,
     kind: intent.kind,
     amount: intent.amount,
     category_id: category.id,
     occurred_on: intent.occurred_on,
     note: intent.note,
     source: "telegram",
-    telegram_user_id: telegramUserId,
+    telegram_user_id: tgUser.id,
   });
   await setLastTransaction(chatId, tx.id);
 
-  // Trigger dashboard refresh on next view.
   try {
     revalidatePath("/");
     revalidatePath("/transactions");
@@ -291,7 +285,6 @@ async function doLog(intent: LogIntent, chatId: number, telegramUserId: number):
   }
   publish("transaction:created", { source: "telegram", payload: { id: tx.id } });
 
-  // Fall back to a synthesized confirmation if the LLM omitted one.
   let body = intent.confirmation?.trim()
     ? intent.confirmation
     : synthesizeLogConfirmation(intent.language, intent.kind, intent.amount, category.label_en, intent.occurred_on);
@@ -304,18 +297,17 @@ async function doLog(intent: LogIntent, chatId: number, telegramUserId: number):
     text: body,
     inlineKeyboard: [[
       { text: s.whatNext.delete, callbackData: `del:${tx.id}` },
-      ...dashboardButton(s.whatNext.dashboard),
+      ...(await dashboardButton(tgUser, s.whatNext.dashboard)),
     ]],
   };
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Reports — picker → render → navigate
+// Reports
 // ────────────────────────────────────────────────────────────────────
 
 const TODAY_ISO = () => format(new Date(), "yyyy-MM-dd");
 
-// Compute the date range for a navigation period anchored at `refDate`.
 function rangeFor(navKey: NavPeriodKey, refDate: string, lang: Lang): { from: string; to: string; label: string; canNext: boolean } {
   const ref = parseISO(refDate);
   const today = TODAY_ISO();
@@ -330,13 +322,12 @@ function rangeFor(navKey: NavPeriodKey, refDate: string, lang: Lang): { from: st
   }
 
   if (navKey === "week") {
-    const dow = ref.getDay() === 0 ? 6 : ref.getDay() - 1; // Mon=0
+    const dow = ref.getDay() === 0 ? 6 : ref.getDay() - 1;
     const monday = new Date(ref); monday.setDate(ref.getDate() - dow);
     const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
     const from = format(monday, "yyyy-MM-dd");
     const to   = format(sunday, "yyyy-MM-dd");
     const label = `${format(monday, "d MMM")} – ${format(sunday, "d MMM yyyy")}`;
-    // Inline today's-week Monday to avoid a recursive call back into rangeFor.
     const todayDow = todayDate.getDay() === 0 ? 6 : todayDate.getDay() - 1;
     const todayMonday = new Date(todayDate); todayMonday.setDate(todayDate.getDate() - todayDow);
     const todayMondayStr = format(todayMonday, "yyyy-MM-dd");
@@ -349,7 +340,6 @@ function rangeFor(navKey: NavPeriodKey, refDate: string, lang: Lang): { from: st
     const from = format(first, "yyyy-MM-dd");
     const to   = format(last,  "yyyy-MM-dd");
     const label = format(first, "MMMM yyyy");
-    // Inline today's month start (no recursion).
     const todayMonthStart = format(new Date(todayDate.getFullYear(), todayDate.getMonth(), 1), "yyyy-MM-dd");
     return { from, to, label, canNext: from < todayMonthStart };
   }
@@ -364,18 +354,15 @@ function rangeFor(navKey: NavPeriodKey, refDate: string, lang: Lang): { from: st
   };
 }
 
-// Step the refDate forward or backward by one period unit.
 export function navStep(navKey: NavPeriodKey, refDate: string, dir: "prev" | "next"): string {
   const ref = parseISO(refDate);
   const sign = dir === "prev" ? -1 : 1;
   if (navKey === "day")   ref.setDate(ref.getDate() + sign);
   if (navKey === "week")  ref.setDate(ref.getDate() + sign * 7);
   if (navKey === "month") ref.setMonth(ref.getMonth() + sign);
-  // ytd: no-op; nav is hidden for ytd anyway
   return format(ref, "yyyy-MM-dd");
 }
 
-// Map a picker selection to a (navKey, refDate) pair we can navigate from.
 export function pickerToNav(picker: ReportPeriodKey): { navKey: NavPeriodKey; refDate: string } {
   const today = TODAY_ISO();
   switch (picker) {
@@ -386,7 +373,7 @@ export function pickerToNav(picker: ReportPeriodKey): { navKey: NavPeriodKey; re
     case "this_month": return { navKey: "month", refDate: today };
     case "last_month": return { navKey: "month", refDate: navStep("month", today, "prev") };
     case "ytd":        return { navKey: "ytd",   refDate: today };
-    case "custom":     return { navKey: "day",   refDate: today }; // overridden by user input
+    case "custom":     return { navKey: "day",   refDate: today };
   }
 }
 
@@ -401,23 +388,22 @@ export function doReportPicker(lang: Lang): BotReply {
   };
 }
 
-// Render a report for a (navKey, refDate). Optionally filter to one category.
 export async function renderReport(opts: {
+  workspaceId: number;
   navKey: NavPeriodKey;
   refDate: string;
   language: Lang;
   categoryKey?: string | null;
 }): Promise<BotReply> {
-  const { navKey, refDate, language: lang } = opts;
+  const { workspaceId, navKey, refDate, language: lang } = opts;
   const { from, to, label, canNext } = rangeFor(navKey, refDate, lang);
   const s = strings(lang);
   const navKb = reportNavInline(navKey, refDate, lang, { canNext });
 
-  // Category-filtered branch ("how much on logistics this month?")
   if (opts.categoryKey) {
-    const cat = await getCategoryByKey(opts.categoryKey);
+    const cat = await getCategoryByKey(workspaceId, opts.categoryKey);
     if (cat) {
-      const r = await categoryTotalBetween(cat.id, from, to);
+      const r = await categoryTotalBetween(workspaceId, cat.id, from, to);
       const sign = cat.kind === "income" ? "+" : "−";
       const verb =
         lang === "uz" ? (cat.kind === "income" ? "kirim" : "chiqim")
@@ -438,25 +424,18 @@ export async function renderReport(opts: {
     }
   }
 
-  // Overall report for the period.
-  // Cash position is computed AS OF the period's end (not always today),
-  // so historical reports show the balance the user actually had then.
   const [t, runway] = await Promise.all([
-    totalsBetween(from, to),
-    computeRunway({ asOfDate: to }),
+    totalsBetween(workspaceId, from, to),
+    computeRunway(workspaceId, { asOfDate: to }),
   ]);
   const lines: string[] = [];
   const headerEmoji = navKey === "day" ? "📅" : navKey === "week" ? "📆" : navKey === "month" ? "🗓" : "📊";
 
-  // Cash label depends on whether the period is in the past or includes today.
   const cashLabel =
     lang === "uz" ? (runway.isHistorical ? `💰 Davr oxiridagi balans` : "💰 Hozirgi balans")
     : lang === "ru" ? (runway.isHistorical ? `💰 Баланс на конец периода` : "💰 Текущий баланс")
     : (runway.isHistorical ? `💰 Cash at end of period` : "💰 Cash on hand");
 
-  // For dates before the workspace started tracking, the cash balance is not
-  // meaningful — show a "tracking hadn't started yet" line instead of the
-  // raw starting_balance.
   const beforeTrackingLine =
     lang === "uz" ? "ℹ️ _Bu sanada hali kuzatuv boshlanmagan edi._"
     : lang === "ru" ? "ℹ️ _На этот день учёт ещё не начался._"
@@ -474,7 +453,6 @@ export async function renderReport(opts: {
       lines.push(beforeTrackingLine);
     } else {
       lines.push(`${cashLabel}: *${formatMoney(runway.currentBalance)}*`);
-      // Forward-looking runway only makes sense when looking at the present.
       if (!runway.isHistorical && runway.monthsOfRunway != null && runway.burnRateMonthly > 0) {
         const e = runway.monthsOfRunway < 3 ? "⚠️" : runway.monthsOfRunway < 6 ? "🟡" : "🟢";
         lines.push(`${e} Yetadi: ~${runway.monthsOfRunway.toFixed(1)} oyga`);
@@ -519,10 +497,7 @@ export async function renderReport(opts: {
   return { text: lines.join("\n"), inlineKeyboard: navKb };
 }
 
-// Used by the LLM-driven `report` intent: maps a free-form "scope" to a picker
-// key, then to the (navKey, refDate) the renderer needs. If the LLM populated
-// `specific_date`, that overrides scope and renders that exact day.
-async function doReport(intent: {
+async function doReport(workspaceId: number, intent: {
   scope: "today" | "this_week" | "last_week" | "this_month" | "last_month" | "ytd";
   category_key?: string | null;
   specific_date?: string | null;
@@ -530,6 +505,7 @@ async function doReport(intent: {
 }): Promise<BotReply> {
   if (intent.specific_date && /^\d{4}-\d{2}-\d{2}$/.test(intent.specific_date)) {
     return renderReport({
+      workspaceId,
       navKey: "day",
       refDate: intent.specific_date,
       language: intent.language,
@@ -538,25 +514,25 @@ async function doReport(intent: {
   }
   const picker: ReportPeriodKey = intent.scope as ReportPeriodKey;
   const { navKey, refDate } = pickerToNav(picker);
-  return renderReport({ navKey, refDate, language: intent.language, categoryKey: intent.category_key ?? null });
+  return renderReport({ workspaceId, navKey, refDate, language: intent.language, categoryKey: intent.category_key ?? null });
 }
 
-async function doEditLast(intent: { patch: { amount?: number; category_key?: string; note?: string; occurred_on?: string }; language: Lang }, chatId: number): Promise<BotReply> {
+async function doEditLast(workspaceId: number, intent: { patch: { amount?: number; category_key?: string; note?: string; occurred_on?: string }; language: Lang }, chatId: number): Promise<BotReply> {
   const state = await getChatState(chatId);
   if (!state?.last_transaction_id) {
     return { text: strings(intent.language).noLast };
   }
-  const tx = await getTransaction(state.last_transaction_id);
+  const tx = await getTransaction(workspaceId, state.last_transaction_id);
   if (!tx) {
     return { text: strings(intent.language).noLast };
   }
 
   let category_id = tx.category_id;
   if (intent.patch.category_key) {
-    const c = await getCategoryByKey(intent.patch.category_key);
+    const c = await getCategoryByKey(workspaceId, intent.patch.category_key);
     if (c && c.kind === tx.kind) category_id = c.id;
   }
-  const updated = await updateTransaction(tx.id, {
+  const updated = await updateTransaction(workspaceId, tx.id, {
     amount: intent.patch.amount ?? tx.amount,
     category_id,
     note: intent.patch.note ?? tx.note,
@@ -569,7 +545,6 @@ async function doEditLast(intent: { patch: { amount?: number; category_key?: str
 
 async function doChangeLanguage(target: Lang, telegram_id: number): Promise<BotReply> {
   await setUserLanguage(telegram_id, target);
-  // Reply in the *new* language so the user sees confirmation in what they asked for.
   const txt =
     target === "uz" ? "✅ Til o'zbekchaga o'zgartirildi.\n\nDavom etish uchun pastdagi tugmalarni bosing yoki ovoz yuboring."
     : target === "ru" ? "✅ Язык изменён на русский.\n\nНажимайте кнопки внизу или отправляйте голосовые сообщения."
@@ -577,8 +552,8 @@ async function doChangeLanguage(target: Lang, telegram_id: number): Promise<BotR
   return { text: txt };
 }
 
-async function doListRecent(lang: Lang): Promise<BotReply> {
-  const txs = await listTransactions({ limit: 5 });
+async function doListRecent(workspaceId: number, lang: Lang): Promise<BotReply> {
+  const txs = await listTransactions(workspaceId, { limit: 5 });
   if (txs.length === 0) {
     const empty =
       lang === "uz" ? "📋 *So'nggi yozuvlar*\n\nHozircha yozuv yo'q. ➕ Qo'shish tugmasini bosing!"
@@ -608,8 +583,8 @@ async function doListRecent(lang: Lang): Promise<BotReply> {
   };
 }
 
-async function doListCategories(lang: Lang): Promise<BotReply> {
-  const cats = await listCategories({ includeArchived: false });
+async function doListCategories(workspaceId: number, lang: Lang): Promise<BotReply> {
+  const cats = await listCategories(workspaceId, { includeArchived: false });
   const income = cats.filter((c) => c.kind === "income");
   const expense = cats.filter((c) => c.kind === "expense");
   const labelOf = (c: typeof cats[number]) =>
@@ -628,7 +603,7 @@ async function doListCategories(lang: Lang): Promise<BotReply> {
   return { text: lines.join("\n") };
 }
 
-async function doCreateCategory(intent: {
+async function doCreateCategory(workspaceId: number, intent: {
   type?: "create_category";
   label_en: string;
   label_uz: string;
@@ -638,8 +613,6 @@ async function doCreateCategory(intent: {
   confirmation: string;
   followup_question: string | null;
 }, chatId: number): Promise<BotReply> {
-  // Need to know income vs expense before saving. Persist the partial intent
-  // so the next user message can complete it (multi-turn flow).
   if (!intent.kind) {
     setPendingIntent(chatId, {
       type: "create_category",
@@ -651,8 +624,9 @@ async function doCreateCategory(intent: {
     return { text: intent.followup_question ?? askKind(intent.language, intent.label_en) };
   }
 
-  const key = await generateUniqueCategoryKey(intent.label_en);
+  const key = await generateUniqueCategoryKey(workspaceId, intent.label_en);
   await createCategory({
+    workspace_id: workspaceId,
     key,
     kind: intent.kind,
     label_en: intent.label_en,
@@ -668,13 +642,10 @@ async function doCreateCategory(intent: {
   return { text };
 }
 
-// Recognize a single-word income/expense reply across uz/ru/en — used by the
-// multi-turn flow to complete a pending create_category intent.
 function parseKindFromText(text: string): "income" | "expense" | null {
   const t = text.toLowerCase().trim();
   if (/^(income|kirim|доход|приход)$/i.test(t)) return "income";
   if (/^(expense|chiqim|xarajat|расход|траты)$/i.test(t)) return "expense";
-  // Allow embedded matches too (e.g. "it's an expense")
   if (/\b(income|kirim|доход|приход)\b/i.test(t)) return "income";
   if (/\b(expense|chiqim|xarajat|расход|траты)\b/i.test(t)) return "expense";
   return null;
@@ -708,7 +679,7 @@ function askForAmount(lang: Lang, kind: "income" | "expense"): string {
     : "How much did you spend? Please send the exact amount.";
 }
 
-async function doDeleteCategory(intent: {
+async function doDeleteCategory(workspaceId: number, intent: {
   category_key: string | null;
   language: Lang;
   confirmation: string;
@@ -719,11 +690,11 @@ async function doDeleteCategory(intent: {
       text: intent.followup_question ?? askWhichCategory(intent.language),
     };
   }
-  const cat = await getCategoryByKey(intent.category_key);
+  const cat = await getCategoryByKey(workspaceId, intent.category_key);
   if (!cat) {
     return { text: categoryNotFound(intent.language, intent.category_key) };
   }
-  await deleteCategory(cat.id);
+  await deleteCategory(workspaceId, cat.id);
   try { revalidatePath("/categories"); revalidatePath("/transactions"); revalidatePath("/"); } catch {}
   publish("category:changed", { source: "telegram" });
   const text = intent.confirmation?.trim()
@@ -756,16 +727,16 @@ function askKind(lang: Lang, name: string): string {
   return `Is "${name}" an income category or an expense category?`;
 }
 
-async function doDeleteLast(intent: { language: Lang }, chatId: number): Promise<BotReply> {
+async function doDeleteLast(workspaceId: number, intent: { language: Lang }, chatId: number): Promise<BotReply> {
   const state = await getChatState(chatId);
   if (!state?.last_transaction_id) {
     return { text: strings(intent.language).noLast };
   }
-  const tx = await getTransaction(state.last_transaction_id);
+  const tx = await getTransaction(workspaceId, state.last_transaction_id);
   if (!tx) {
     return { text: strings(intent.language).noLast };
   }
-  await deleteTransaction(tx.id);
+  await deleteTransaction(workspaceId, tx.id);
   await setLastTransaction(chatId, null);
   try { revalidatePath("/"); revalidatePath("/transactions"); revalidatePath("/analytics"); } catch {}
   publish("transaction:deleted", { source: "telegram", payload: { id: tx.id } });
@@ -776,16 +747,81 @@ async function doDeleteLast(intent: { language: Lang }, chatId: number): Promise
 
 // Public so the callback_query handler can call it directly when the user taps
 // the 🗑 Delete button under a saved transaction.
-export async function deleteByTxId(txId: number, chatId: number, language: Lang): Promise<BotReply> {
-  const tx = await getTransaction(txId);
+export async function deleteByTxId(workspaceId: number, txId: number, chatId: number, language: Lang): Promise<BotReply> {
+  const tx = await getTransaction(workspaceId, txId);
   if (!tx) return { text: strings(language).noLast };
-  await deleteTransaction(txId);
-  // If this was the most-recent tx for this chat, clear the pointer too.
+  await deleteTransaction(workspaceId, txId);
   const state = await getChatState(chatId);
   if (state?.last_transaction_id === txId) await setLastTransaction(chatId, null);
   try { revalidatePath("/"); revalidatePath("/transactions"); revalidatePath("/analytics"); } catch {}
   publish("transaction:deleted", { source: "telegram", payload: { id: txId } });
   return { text: strings(language).deleted(tx.category_label_en, formatMoney(tx.amount)) };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// /dashboard and /reset
+// ────────────────────────────────────────────────────────────────────
+
+async function doDashboard(tgUser: TelegramUser, lang: Lang): Promise<BotReply> {
+  const url = await getDashboardUrlForBotUser(tgUser);
+  if (!url) {
+    const txt =
+      lang === "uz" ? "Boshqaruv paneli URLi hali sozlanmagan. APP_BASE_URL ni HTTPS ga o'zgartiring."
+      : lang === "ru" ? "URL панели пока не настроен. Установите APP_BASE_URL на HTTPS."
+      : "Dashboard URL isn't configured yet. Set APP_BASE_URL to an HTTPS URL.";
+    return { text: txt };
+  }
+  if (tgUser.user_id) {
+    const text =
+      lang === "uz" ? `🌐 *Sizning boshqaruv panelingiz*\n\nKirib oling — hisobingizdagi barcha ma'lumotlar shu yerda.`
+      : lang === "ru" ? `🌐 *Ваша панель*\n\nВойдите — все ваши данные там.`
+      : `🌐 *Your dashboard*\n\nSign in to see everything you've logged.`;
+    return {
+      text,
+      inlineKeyboard: [[{ text: strings(lang).whatNext.dashboard, url }]],
+    };
+  }
+  const text =
+    lang === "uz" ? `🌐 *Sizning shaxsiy boshqaruv panelingiz tayyor*\n\nQuyidagi tugmani bosib hisob yarating — bu havola faqat sizniki.`
+    : lang === "ru" ? `🌐 *Ваша личная панель готова*\n\nНажмите ниже, чтобы создать аккаунт — эта ссылка только для вас.`
+    : `🌐 *Your personal dashboard is ready*\n\nTap below to create an account — this link is yours alone.`;
+  return {
+    text,
+    inlineKeyboard: [[{ text: strings(lang).whatNext.dashboard, url }]],
+  };
+}
+
+// /reset → DM the user a fresh password reset link they can tap to set a new
+// password. Only works if the user has already claimed an account, since we
+// need a real `users.id` to bind the token to.
+async function doResetViaBot(tgUser: TelegramUser, lang: Lang): Promise<BotReply> {
+  if (!tgUser.user_id) {
+    const txt =
+      lang === "uz" ? "Avval boshqaruv panelida hisob yarating — keyin parolni tiklash mumkin bo'ladi. /dashboard ni bosing."
+      : lang === "ru" ? "Сначала создайте аккаунт в панели — после этого можно будет сбросить пароль. Нажмите /dashboard."
+      : "Create an account on the dashboard first — then you can reset your password. Tap /dashboard.";
+    return { text: txt };
+  }
+  const base = (process.env.APP_BASE_URL?.trim() || "").replace(/\/$/, "");
+  if (!/^https:\/\//.test(base)) {
+    return { text: "Reset URLs require APP_BASE_URL to be HTTPS." };
+  }
+  const token = newToken();
+  await createPasswordResetToken({
+    token,
+    user_id: tgUser.user_id,
+    channel: "telegram",
+    expires_at: tokenExpiry(2),
+  });
+  const url = `${base}/reset-password/${token}`;
+  const text =
+    lang === "uz" ? `🔐 *Parolni tiklash*\n\nQuyidagi havolani 2 soat ichida bosing va yangi parol kiriting:`
+    : lang === "ru" ? `🔐 *Сброс пароля*\n\nНажмите ссылку ниже в течение 2 часов и задайте новый пароль:`
+    : `🔐 *Reset password*\n\nTap the link below within 2 hours to set a new password:`;
+  return {
+    text,
+    inlineKeyboard: [[{ text: lang === "uz" ? "🔐 Parolni tiklash" : lang === "ru" ? "🔐 Сбросить пароль" : "🔐 Reset password", url }]],
+  };
 }
 
 function synthesizeLogConfirmation(

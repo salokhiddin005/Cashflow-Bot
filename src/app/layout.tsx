@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "@/components/sidebar";
-import { Topbar } from "@/components/topbar";
 import { ToastHost } from "@/components/toast-host";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 
@@ -22,15 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <body className="min-h-full">
         <ToastHost>
-          <ConfirmProvider>
-            <div className="flex min-h-screen bg-[--color-background] text-[--color-foreground]">
-              <Sidebar />
-              <div className="flex flex-1 flex-col">
-                <Topbar />
-                <main className="flex-1 px-6 py-6 lg:px-10 lg:py-8">{children}</main>
-              </div>
-            </div>
-          </ConfirmProvider>
+          <ConfirmProvider>{children}</ConfirmProvider>
         </ToastHost>
       </body>
     </html>

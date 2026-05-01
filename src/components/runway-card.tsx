@@ -1,10 +1,12 @@
 import { Card } from "./ui";
 import { formatMoney } from "@/lib/format";
 import { computeRunway } from "@/lib/insights";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { TrendingDown, ShieldCheck } from "lucide-react";
 
 export async function RunwayCard() {
-  const r = await computeRunway();
+  const { workspace } = await requireUserWorkspace();
+  const r = await computeRunway(workspace.id);
   const status = r.status;
   const tone =
     status === "profitable" ? "text-emerald-600 dark:text-emerald-400"

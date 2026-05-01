@@ -6,6 +6,7 @@ import {
 } from "@/lib/db/queries";
 import { resolvePeriod, type PeriodKey } from "@/lib/dates";
 import { computeRunway } from "@/lib/insights";
+import { getCurrentUserAndWorkspace } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,10 @@ export const dynamic = "force-dynamic";
 const ALLOWED: PeriodKey[] = ["this_month", "last_30", "last_7", "ytd"];
 
 export async function GET(request: Request) {
+  const ctx = await getCurrentUserAndWorkspace();
+  if (!ctx) return Response.json({ error: "unauthenticated" }, { status: 401 });
+  const { workspace } = ctx;
+
   const url = new URL(request.url);
   const periodParam = z
     .enum(["this_month", "last_30", "last_7", "ytd"] as const)
@@ -22,12 +27,12 @@ export async function GET(request: Request) {
 
   const period = resolvePeriod(periodParam);
   const [cur, prev, expenseFull, incomeFull, runway, total] = await Promise.all([
-    totalsBetween(period.from, period.to),
-    totalsBetween(period.prev.from, period.prev.to),
-    categoryBreakdown("expense", period.from, period.to),
-    categoryBreakdown("income",  period.from, period.to),
-    computeRunway(),
-    countTransactions(),
+    totalsBetween(workspace.id, period.from, period.to),
+    totalsBetween(workspace.id, period.prev.from, period.prev.to),
+    categoryBreakdown(workspace.id, "expense", period.from, period.to),
+    categoryBreakdown(workspace.id, "income",  period.from, period.to),
+    computeRunway(workspace.id),
+    countTransactions(workspace.id),
   ]);
   const expense = expenseFull.slice(0, 12);
   const income  = incomeFull.slice(0, 12);

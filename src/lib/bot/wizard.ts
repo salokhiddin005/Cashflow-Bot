@@ -84,14 +84,13 @@ export async function handleWizardCallback(
   chatId: number,
   callbackData: string,
   state: WizardState | null,
+  workspaceId: number,
   telegramUserId: number,
 ): Promise<BotReply> {
-  // Cancel anywhere ends the wizard.
   if (callbackData === "wiz:cancel") {
     return cancelWizard(chatId, state?.language ?? "en");
   }
   if (!state) {
-    // Stale tap on a wizard button — gently restart from kind picker.
     return startLogWizard(chatId, "en");
   }
   const lang = state.language;
@@ -119,7 +118,7 @@ export async function handleWizardCallback(
     state.draft.amount = parseInt(am[1], 10);
     state.step = "category";
     await setPendingIntent(chatId, state);
-    return categoryStep(state);
+    return categoryStep(workspaceId, state);
   }
 
   // Step: choose category
@@ -163,12 +162,12 @@ export async function handleWizardCallback(
   if (callbackData === "wiz:note:skip") {
     state.step = "confirm";
     await setPendingIntent(chatId, state);
-    return confirmStep(state);
+    return confirmStep(workspaceId, state);
   }
 
   // Step: save (final)
   if (callbackData === "wiz:save") {
-    return finalizeWizard(chatId, state, telegramUserId);
+    return finalizeWizard(chatId, state, workspaceId, telegramUserId);
   }
 
   // Unknown callback — bail out.
@@ -183,9 +182,9 @@ export async function handleWizardText(
   chatId: number,
   text: string,
   state: WizardState,
+  workspaceId: number,
   telegramUserId: number,
 ): Promise<BotReply> {
-  // telegramUserId reserved for future per-user wizard logic
   void telegramUserId;
   const lang = state.language;
   const trimmed = text.trim();
@@ -198,7 +197,7 @@ export async function handleWizardText(
     state.draft.amount = amount;
     state.step = "category";
     await setPendingIntent(chatId, state);
-    return categoryStep(state);
+    return categoryStep(workspaceId, state);
   }
 
   if (state.step === "date_typing") {
@@ -218,35 +217,35 @@ export async function handleWizardText(
     state.draft.note = trimmed.slice(0, 500);
     state.step = "confirm";
     await setPendingIntent(chatId, state);
-    return confirmStep(state);
+    return confirmStep(workspaceId, state);
   }
 
   // For other steps, the typed input doesn't fit — re-show the current step.
-  return reShowStep(state);
+  return reShowStep(workspaceId, state);
 }
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────
 
-async function categoryStep(state: WizardState): Promise<BotReply> {
-  const cats = await listCategories({ includeArchived: false });
+async function categoryStep(workspaceId: number, state: WizardState): Promise<BotReply> {
+  const cats = await listCategories(workspaceId, { includeArchived: false });
   return {
     text: wizardPrompts(state.language).chooseCategory,
     inlineKeyboard: categoryPickerInline(cats, state.draft.kind!, state.language),
   };
 }
 
-async function confirmStep(state: WizardState): Promise<BotReply> {
+async function confirmStep(workspaceId: number, state: WizardState): Promise<BotReply> {
   const lang = state.language;
-  const summary = await formatDraftSummary(state);
+  const summary = await formatDraftSummary(workspaceId, state);
   return {
     text: wizardPrompts(lang).confirm(summary),
     inlineKeyboard: confirmSaveInline(lang),
   };
 }
 
-async function reShowStep(state: WizardState): Promise<BotReply> {
+async function reShowStep(workspaceId: number, state: WizardState): Promise<BotReply> {
   const lang = state.language;
   switch (state.step) {
     case "kind":
@@ -254,22 +253,22 @@ async function reShowStep(state: WizardState): Promise<BotReply> {
     case "amount":
       return { text: wizardPrompts(lang).chooseAmount, inlineKeyboard: amountPickerInline(lang) };
     case "category":
-      return categoryStep(state);
+      return categoryStep(workspaceId, state);
     case "date":
       return { text: wizardPrompts(lang).chooseDate, inlineKeyboard: datePickerInline(lang) };
     case "note":
       return { text: wizardPrompts(lang).addNote, inlineKeyboard: noteSkipInline(lang) };
     case "confirm":
-      return confirmStep(state);
+      return confirmStep(workspaceId, state);
     default:
       return cancelWizard(0 as never, lang);
   }
 }
 
-async function formatDraftSummary(state: WizardState): Promise<string> {
+async function formatDraftSummary(workspaceId: number, state: WizardState): Promise<string> {
   const lang = state.language;
   const d = state.draft;
-  const cat = d.category_id ? await getCategoryById(d.category_id) : undefined;
+  const cat = d.category_id ? await getCategoryById(workspaceId, d.category_id) : undefined;
   const catLabel = cat
     ? (lang === "uz" ? cat.label_uz : lang === "ru" ? cat.label_ru : cat.label_en)
     : "—";
@@ -289,14 +288,14 @@ async function formatDraftSummary(state: WizardState): Promise<string> {
   return lines.join("\n");
 }
 
-async function finalizeWizard(chatId: number, state: WizardState, telegramUserId: number): Promise<BotReply> {
+async function finalizeWizard(chatId: number, state: WizardState, workspaceId: number, telegramUserId: number): Promise<BotReply> {
   const lang = state.language;
   const d = state.draft;
   if (!d.kind || !d.amount || !d.category_id || !d.occurred_on) {
-    // Shouldn't happen, but bail safely.
     return cancelWizard(chatId, lang);
   }
   const tx = await createTransaction({
+    workspace_id: workspaceId,
     kind: d.kind,
     amount: d.amount,
     category_id: d.category_id,
@@ -309,15 +308,13 @@ async function finalizeWizard(chatId: number, state: WizardState, telegramUserId
   await setPendingIntent(chatId, null);
   try { revalidatePath("/"); revalidatePath("/transactions"); revalidatePath("/analytics"); } catch {}
   return {
-    text: wizardPrompts(lang).saved + "\n\n" + (await formatDraftSummary(state)),
+    text: wizardPrompts(lang).saved + "\n\n" + (await formatDraftSummary(workspaceId, state)),
     inlineKeyboard: [[{ text: lang === "uz" ? "🗑 O'chirish" : lang === "ru" ? "🗑 Удалить" : "🗑 Delete", callbackData: `del:${tx.id}` }]],
   };
 }
 
-// Parse a free-form amount string. Handles "1.2m", "500k", "1 200 000", "1,200,000".
 function parseAmount(text: string): number | null {
   const t = text.toLowerCase().replace(/[\s,_]/g, "").trim();
-  // Match number + optional suffix
   const m = t.match(/^(\d+(?:\.\d+)?)([kmб]|млн|mln|ming|ming\.|тыс|тыс\.)?$/iu);
   if (!m) {
     const n = Number(t);

@@ -1,12 +1,60 @@
--- Postgres schema for the Business Finance Manager.
--- Single-tenant per database. Multi-user is supported through telegram_users.
--- Designed to run safely on first boot (every CREATE is IF NOT EXISTS).
+-- Multi-tenant schema for Cashflow Manager.
+-- Every user gets their own workspace + categories + transactions.
+-- Authentication: email / phone / Telegram username (any one is enough).
+-- Telegram users get a workspace as soon as they /start the bot, then claim
+-- it from the dashboard via a one-time signed link.
 
--- Note: amounts and Telegram IDs use BIGINT — Telegram chat/user ids exceed
--- 32-bit, and UZS amounts can be very large.
+-- One-time wipe: detects the legacy single-tenant schema (a `workspace`
+-- table without a sibling `users` table) and drops it before recreating.
+-- After that, every CREATE below is IF NOT EXISTS so cold starts are safe.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='workspace')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='users')
+  THEN
+    DROP TABLE IF EXISTS bot_chat_state CASCADE;
+    DROP TABLE IF EXISTS transactions CASCADE;
+    DROP TABLE IF EXISTS telegram_users CASCADE;
+    DROP TABLE IF EXISTS categories CASCADE;
+    DROP TABLE IF EXISTS workspace CASCADE;
+  END IF;
+END $$;
 
-CREATE TABLE IF NOT EXISTS workspace (
-  id                    INTEGER PRIMARY KEY CHECK (id = 1),
+-- ─── Users & sessions ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+  id              SERIAL PRIMARY KEY,
+  email           TEXT UNIQUE,
+  phone           TEXT UNIQUE,
+  tg_username     TEXT UNIQUE,
+  password_hash   TEXT NOT NULL,
+  created_at      TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  CHECK (email IS NOT NULL OR phone IS NOT NULL OR tg_username IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at  TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token       TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel     TEXT NOT NULL CHECK (channel IN ('email','phone','telegram')),
+  expires_at  TEXT NOT NULL,
+  used_at     TEXT,
+  created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+
+-- ─── Workspaces (one per user) ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS workspaces (
+  id                    SERIAL PRIMARY KEY,
+  -- nullable: a workspace exists for a Telegram user before they claim it.
+  user_id               INTEGER REFERENCES users(id) ON DELETE CASCADE,
   name                  TEXT NOT NULL DEFAULT 'My Business',
   base_currency         TEXT NOT NULL DEFAULT 'UZS',
   starting_balance      BIGINT NOT NULL DEFAULT 0,
@@ -14,27 +62,15 @@ CREATE TABLE IF NOT EXISTS workspace (
   timezone              TEXT NOT NULL DEFAULT 'Asia/Tashkent',
   created_at            TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id) WHERE user_id IS NOT NULL;
 
-INSERT INTO workspace (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS categories (
-  id          SERIAL PRIMARY KEY,
-  key         TEXT NOT NULL UNIQUE,
-  kind        TEXT NOT NULL CHECK (kind IN ('income','expense')),
-  label_uz    TEXT NOT NULL,
-  label_ru    TEXT NOT NULL,
-  label_en    TEXT NOT NULL,
-  color       TEXT NOT NULL DEFAULT '#64748b',
-  icon        TEXT NOT NULL DEFAULT 'circle',
-  is_archived INTEGER NOT NULL DEFAULT 0,
-  is_system   INTEGER NOT NULL DEFAULT 0,
-  sort_order  INTEGER NOT NULL DEFAULT 100,
-  created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
-);
+-- ─── Telegram users (linked to a workspace, optionally to a real user) ─────
 
 CREATE TABLE IF NOT EXISTS telegram_users (
   id              SERIAL PRIMARY KEY,
   telegram_id     BIGINT NOT NULL UNIQUE,
+  workspace_id    INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
   username        TEXT,
   first_name      TEXT,
   last_name       TEXT,
@@ -42,8 +78,42 @@ CREATE TABLE IF NOT EXISTS telegram_users (
   created_at      TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
 
+-- One-time link the bot sends so a TG user can claim/sign up for their dashboard.
+CREATE TABLE IF NOT EXISTS telegram_claim_tokens (
+  token            TEXT PRIMARY KEY,
+  telegram_user_id INTEGER NOT NULL REFERENCES telegram_users(id) ON DELETE CASCADE,
+  workspace_id     INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  expires_at       TEXT NOT NULL,
+  used_at          TEXT,
+  created_at       TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+CREATE INDEX IF NOT EXISTS idx_claim_tokens_tg ON telegram_claim_tokens(telegram_user_id);
+
+-- ─── Categories (per workspace) ────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS categories (
+  id           SERIAL PRIMARY KEY,
+  workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  key          TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('income','expense')),
+  label_uz     TEXT NOT NULL,
+  label_ru     TEXT NOT NULL,
+  label_en     TEXT NOT NULL,
+  color        TEXT NOT NULL DEFAULT '#64748b',
+  icon         TEXT NOT NULL DEFAULT 'circle',
+  is_archived  INTEGER NOT NULL DEFAULT 0,
+  is_system    INTEGER NOT NULL DEFAULT 0,
+  sort_order   INTEGER NOT NULL DEFAULT 100,
+  created_at   TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  UNIQUE (workspace_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_categories_workspace ON categories(workspace_id);
+
+-- ─── Transactions (per workspace) ──────────────────────────────────────────
+
 CREATE TABLE IF NOT EXISTS transactions (
   id                  SERIAL PRIMARY KEY,
+  workspace_id        INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   kind                TEXT NOT NULL CHECK (kind IN ('income','expense')),
   amount              BIGINT NOT NULL CHECK (amount > 0),
   currency            TEXT NOT NULL DEFAULT 'UZS',
@@ -59,12 +129,13 @@ CREATE TABLE IF NOT EXISTS transactions (
   updated_at          TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
 
-CREATE INDEX IF NOT EXISTS idx_tx_occurred_on ON transactions(occurred_on);
-CREATE INDEX IF NOT EXISTS idx_tx_category    ON transactions(category_id);
-CREATE INDEX IF NOT EXISTS idx_tx_kind        ON transactions(kind);
+CREATE INDEX IF NOT EXISTS idx_tx_workspace    ON transactions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_tx_occurred_on  ON transactions(workspace_id, occurred_on);
+CREATE INDEX IF NOT EXISTS idx_tx_category     ON transactions(category_id);
+CREATE INDEX IF NOT EXISTS idx_tx_kind         ON transactions(workspace_id, kind);
 
--- Per-chat conversation state for the bot (last tx for "delete that" / "fix that",
--- plus pending intent for multi-turn flows like create_category and the wizard).
+-- ─── Bot per-chat state (chat = telegram chat, scoped to workspace via TG user) ─
+
 CREATE TABLE IF NOT EXISTS bot_chat_state (
   chat_id              BIGINT PRIMARY KEY,
   last_transaction_id  INTEGER REFERENCES transactions(id) ON DELETE SET NULL,

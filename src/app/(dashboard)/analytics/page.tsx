@@ -16,6 +16,7 @@ import {
   totalsBetween,
 } from "@/lib/db/queries";
 import { balanceForecast } from "@/lib/insights";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { eachDayBetween, resolvePeriod, type PeriodKey } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
 import { BarChart3 } from "lucide-react";
@@ -30,11 +31,12 @@ export default async function AnalyticsPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
+  const { workspace } = await requireUserWorkspace();
   const sp = await searchParams;
   const periodKey = (ALLOWED.includes(sp.period as PeriodKey) ? sp.period : "last_30") as PeriodKey;
   const period = resolvePeriod(periodKey);
 
-  if ((await countTransactions()) === 0) {
+  if ((await countTransactions(workspace.id)) === 0) {
     return (
       <div className="space-y-6">
         <PageHeader title="Analytics" subtitle="Charts and breakdowns will appear once you log a few transactions." />
@@ -49,12 +51,12 @@ export default async function AnalyticsPage({
 
   // Run all read-only queries in parallel for first-byte performance.
   const [totals, series, expenseBreakdown, incomeBreakdown, balance, forecast] = await Promise.all([
-    totalsBetween(period.from, period.to),
-    dailySeries(period.from, period.to),
-    categoryBreakdown("expense", period.from, period.to),
-    categoryBreakdown("income", period.from, period.to),
-    balanceSeries(period.from, period.to),
-    balanceForecast(60, 30),
+    totalsBetween(workspace.id, period.from, period.to),
+    dailySeries(workspace.id, period.from, period.to),
+    categoryBreakdown(workspace.id, "expense", period.from, period.to),
+    categoryBreakdown(workspace.id, "income",  period.from, period.to),
+    balanceSeries(workspace.id, period.from, period.to),
+    balanceForecast(workspace.id, 60, 30),
   ]);
 
   // Pad missing days with zeros so the chart line is continuous.

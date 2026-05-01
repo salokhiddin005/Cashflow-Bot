@@ -2,10 +2,12 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Card, CardBody, CardHeader, EmptyState, Pill } from "./ui";
 import { listTransactions } from "@/lib/db/queries";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { formatDate, formatMoney } from "@/lib/format";
 
 export async function RecentTransactions() {
-  const txs = await listTransactions({ limit: 8 });
+  const { workspace } = await requireUserWorkspace();
+  const txs = await listTransactions(workspace.id, { limit: 8 });
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">

@@ -17,22 +17,18 @@ function pool(): Pool {
   return globalThis.__fmPool;
 }
 
-// Run schema + seed once per process. Idempotent — schema uses IF NOT EXISTS,
-// and the categories seed uses ON CONFLICT DO NOTHING.
+// Run schema once per process. Idempotent — schema uses IF NOT EXISTS, and
+// the legacy single-tenant tables are dropped on first migration via a DO
+// block in schema.sql. Per-workspace category seeding happens at workspace
+// creation time, not here.
 async function migrateOnce(): Promise<void> {
   if (globalThis.__fmMigrated) return;
-  // Set the flag BEFORE the seed call: seedDefaultCategories goes through
-  // execute() which itself calls migrateOnce(). Without setting the flag
-  // upfront, the seed re-enters migrate and deadlocks.
   globalThis.__fmMigrated = true;
   try {
     const schemaPath = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
     const schema = fs.readFileSync(schemaPath, "utf8");
     await pool().query(schema);
-    const { seedDefaultCategories } = await import("./seed");
-    await seedDefaultCategories();
   } catch (e) {
-    // If migration fails, allow a retry on the next call.
     globalThis.__fmMigrated = false;
     throw e;
   }

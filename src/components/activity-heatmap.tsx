@@ -1,16 +1,18 @@
 import { format, parseISO, startOfWeek, addDays, differenceInDays } from "date-fns";
 import { Card, CardBody, CardHeader } from "./ui";
 import { dailySeriesFilled } from "@/lib/insights";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { formatMoney } from "@/lib/format";
 
 // Renders a GitHub-contributions-style calendar heatmap of the last ~13 weeks.
 // Color = net flow (green for income-heavy, red for expense-heavy, gray empty).
 export async function ActivityHeatmap({ weeks = 13 }: { weeks?: number }) {
+  const { workspace } = await requireUserWorkspace();
   const today = new Date();
   // Anchor end date to *Sunday* of this week so we always show full weeks.
   const endOfThisWeek = addDays(startOfWeek(today, { weekStartsOn: 1 }), 6);
   const startDate = addDays(endOfThisWeek, -(weeks * 7) + 1);
-  const data = await dailySeriesFilled(format(startDate, "yyyy-MM-dd"), format(endOfThisWeek, "yyyy-MM-dd"));
+  const data = await dailySeriesFilled(workspace.id, format(startDate, "yyyy-MM-dd"), format(endOfThisWeek, "yyyy-MM-dd"));
 
   // Group days into columns (weeks). Each column has 7 cells (Mon..Sun).
   const cols: typeof data[number][][] = [];

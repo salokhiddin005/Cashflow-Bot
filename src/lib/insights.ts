@@ -16,8 +16,8 @@ export type Runway = {
 
 const toNum = (v: unknown): number => (typeof v === "string" ? Number(v) : (v as number));
 
-export async function computeRunway(opts: { asOfDate?: string } = {}): Promise<Runway> {
-  const ws = await getWorkspace();
+export async function computeRunway(workspaceId: number, opts: { asOfDate?: string } = {}): Promise<Runway> {
+  const ws = await getWorkspace(workspaceId);
   const today = new Date();
   const todayStr = format(today, "yyyy-MM-dd");
   const asOf = opts.asOfDate ?? todayStr;
@@ -27,13 +27,13 @@ export async function computeRunway(opts: { asOfDate?: string } = {}): Promise<R
   const allTime = await queryOne<{ net: string }>(
     `SELECT COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0)
           - COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS net
-     FROM transactions WHERE occurred_on <= $1`,
-    [asOf],
+     FROM transactions WHERE workspace_id = $1 AND occurred_on <= $2`,
+    [workspaceId, asOf],
   );
   const currentBalance = ws.starting_balance + toNum(allTime!.net);
 
   const from30 = format(subDays(parseISO(asOf), 29), "yyyy-MM-dd");
-  const t30 = await totalsBetween(from30, asOf);
+  const t30 = await totalsBetween(workspaceId, from30, asOf);
   const trailing30Net = t30.income - t30.expense;
   const burnRateMonthly = trailing30Net < 0 ? Math.abs(trailing30Net) : 0;
   const monthsOfRunway =
@@ -65,16 +65,16 @@ export async function computeRunway(opts: { asOfDate?: string } = {}): Promise<R
 
 export type DailyPoint = { day: string; income: number; expense: number; net: number; count: number };
 
-export async function dailySeriesFilled(fromIso: string, toIso: string): Promise<DailyPoint[]> {
+export async function dailySeriesFilled(workspaceId: number, fromIso: string, toIso: string): Promise<DailyPoint[]> {
   const rows = await query<{ day: string; income: string; expense: string; count: string }>(
     `SELECT occurred_on AS day,
       COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0) AS income,
       COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS expense,
       COUNT(*) AS count
      FROM transactions
-     WHERE occurred_on BETWEEN $1 AND $2
+     WHERE workspace_id = $1 AND occurred_on BETWEEN $2 AND $3
      GROUP BY occurred_on`,
-    [fromIso, toIso],
+    [workspaceId, fromIso, toIso],
   );
   const map = new Map(rows.map((r) => [r.day, r]));
   const out: DailyPoint[] = [];
@@ -95,11 +95,11 @@ export async function dailySeriesFilled(fromIso: string, toIso: string): Promise
   return out;
 }
 
-export async function sparklineSeries(metric: "income" | "expense" | "net", days = 14): Promise<{ day: string; value: number }[]> {
+export async function sparklineSeries(workspaceId: number, metric: "income" | "expense" | "net", days = 14): Promise<{ day: string; value: number }[]> {
   const today = new Date();
   const fromIso = format(new Date(today.getTime() - (days - 1) * 86_400_000), "yyyy-MM-dd");
   const toIso = format(today, "yyyy-MM-dd");
-  const rows = await dailySeriesFilled(fromIso, toIso);
+  const rows = await dailySeriesFilled(workspaceId, fromIso, toIso);
   return rows.map((p) => ({
     day: p.day,
     value: metric === "income" ? p.income : metric === "expense" ? p.expense : p.net,
@@ -126,7 +126,7 @@ export type RecurringPattern = {
   confidence: "high" | "medium" | "low";
 };
 
-export async function detectRecurring(): Promise<RecurringPattern[]> {
+export async function detectRecurring(workspaceId: number): Promise<RecurringPattern[]> {
   const since = format(new Date(Date.now() - 180 * 86_400_000), "yyyy-MM-dd");
   type Row = {
     id: number;
@@ -142,9 +142,9 @@ export async function detectRecurring(): Promise<RecurringPattern[]> {
     `SELECT t.id, t.category_id, c.key AS category_key, c.label_en AS category_label_en,
             c.color AS category_color, t.kind, t.amount, t.occurred_on
      FROM transactions t JOIN categories c ON c.id = t.category_id
-     WHERE t.occurred_on >= $1
+     WHERE t.workspace_id = $1 AND t.occurred_on >= $2
      ORDER BY t.category_id, t.occurred_on ASC`,
-    [since],
+    [workspaceId, since],
   );
   const rows = rawRows.map((r) => ({ ...r, category_id: toNum(r.category_id), amount: toNum(r.amount) }));
 
@@ -215,8 +215,8 @@ export async function detectRecurring(): Promise<RecurringPattern[]> {
 
 export type ForecastPoint = { day: string; balance: number; projected: boolean };
 
-export async function balanceForecast(historyDays = 60, projectionDays = 30): Promise<ForecastPoint[]> {
-  const ws = await getWorkspace();
+export async function balanceForecast(workspaceId: number, historyDays = 60, projectionDays = 30): Promise<ForecastPoint[]> {
+  const ws = await getWorkspace(workspaceId);
   const today = new Date();
   const todayStr = format(today, "yyyy-MM-dd");
 
@@ -226,11 +226,11 @@ export async function balanceForecast(historyDays = 60, projectionDays = 30): Pr
   const before = await queryOne<{ net: string }>(
     `SELECT COALESCE(SUM(CASE WHEN kind='income'  THEN amount END), 0)
           - COALESCE(SUM(CASE WHEN kind='expense' THEN amount END), 0) AS net
-     FROM transactions WHERE occurred_on < $1`,
-    [histStartStr],
+     FROM transactions WHERE workspace_id = $1 AND occurred_on < $2`,
+    [workspaceId, histStartStr],
   );
 
-  const histDaily = await dailySeriesFilled(histStartStr, todayStr);
+  const histDaily = await dailySeriesFilled(workspaceId, histStartStr, todayStr);
   let running = ws.starting_balance + toNum(before!.net);
   const points: ForecastPoint[] = [];
   for (const p of histDaily) {
@@ -238,8 +238,8 @@ export async function balanceForecast(historyDays = 60, projectionDays = 30): Pr
     points.push({ day: p.day, balance: running, projected: false });
   }
 
-  const recurring = await detectRecurring();
-  const trailing30 = await totalsBetween(format(new Date(today.getTime() - 29 * 86_400_000), "yyyy-MM-dd"), todayStr);
+  const recurring = await detectRecurring(workspaceId);
+  const trailing30 = await totalsBetween(workspaceId, format(new Date(today.getTime() - 29 * 86_400_000), "yyyy-MM-dd"), todayStr);
   const trailing30Net = trailing30.income - trailing30.expense;
   const recurringInTrailing = recurring
     .filter((r) => r.confidence !== "low")
@@ -278,12 +278,12 @@ export type AnomalyFlag = {
   multiple: number;
 };
 
-export async function findAnomalies(transactionIds: number[]): Promise<Map<number, AnomalyFlag>> {
+export async function findAnomalies(workspaceId: number, transactionIds: number[]): Promise<Map<number, AnomalyFlag>> {
   if (transactionIds.length === 0) return new Map();
-  const placeholders = transactionIds.map((_, i) => `$${i + 1}`).join(",");
+  const placeholders = transactionIds.map((_, i) => `$${i + 2}`).join(",");
   const txs = await query<{ id: number; kind: "income" | "expense"; amount: string; category_id: number; occurred_on: string }>(
-    `SELECT id, kind, amount, category_id, occurred_on FROM transactions WHERE id IN (${placeholders})`,
-    transactionIds,
+    `SELECT id, kind, amount, category_id, occurred_on FROM transactions WHERE workspace_id = $1 AND id IN (${placeholders})`,
+    [workspaceId, ...transactionIds],
   );
 
   const out = new Map<number, AnomalyFlag>();
@@ -292,10 +292,10 @@ export async function findAnomalies(transactionIds: number[]): Promise<Map<numbe
     const since = format(subDays(new Date(tx.occurred_on), 90), "yyyy-MM-dd");
     const peers = await query<{ amount: string }>(
       `SELECT amount FROM transactions
-       WHERE category_id = $1 AND kind = 'expense'
-         AND occurred_on >= $2 AND occurred_on < $3
+       WHERE workspace_id = $1 AND category_id = $2 AND kind = 'expense'
+         AND occurred_on >= $3 AND occurred_on < $4
        ORDER BY amount`,
-      [toNum(tx.category_id), since, tx.occurred_on],
+      [workspaceId, toNum(tx.category_id), since, tx.occurred_on],
     );
     if (peers.length < 4) continue;
     const sorted = peers.map((p) => toNum(p.amount));

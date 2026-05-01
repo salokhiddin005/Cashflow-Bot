@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/queries";
 import { sparklineSeries } from "@/lib/insights";
 import { resolvePeriod, type PeriodKey } from "@/lib/dates";
+import { requireUserWorkspace } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,12 +26,13 @@ export default async function OverviewPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
+  const { workspace } = await requireUserWorkspace();
   const sp = await searchParams;
   const periodKey = (ALLOWED.includes(sp.period as PeriodKey) ? sp.period : "this_month") as PeriodKey;
   const period = resolvePeriod(periodKey);
 
-  const totalCount = await countTransactions();
-  const categories = await listCategories();
+  const totalCount = await countTransactions(workspace.id);
+  const categories = await listCategories(workspace.id);
 
   if (totalCount === 0) {
     return (
@@ -58,11 +60,11 @@ export default async function OverviewPage({
 
   // Run all read-only queries in parallel so first-byte stays fast.
   const [cur, prev, incomeSpark, expenseSpark, netSpark] = await Promise.all([
-    totalsBetween(period.from, period.to),
-    totalsBetween(period.prev.from, period.prev.to),
-    sparklineSeries("income",  14),
-    sparklineSeries("expense", 14),
-    sparklineSeries("net",     14),
+    totalsBetween(workspace.id, period.from, period.to),
+    totalsBetween(workspace.id, period.prev.from, period.prev.to),
+    sparklineSeries(workspace.id, "income",  14),
+    sparklineSeries(workspace.id, "expense", 14),
+    sparklineSeries(workspace.id, "net",     14),
   ]);
 
   return (

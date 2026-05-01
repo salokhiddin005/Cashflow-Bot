@@ -10,7 +10,6 @@
 import "./_env";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const APP_URL = process.env.APP_BASE_URL?.trim();
 
 if (!TOKEN) {
   console.error("TELEGRAM_BOT_TOKEN missing");
@@ -24,27 +23,33 @@ type Cmd = { command: string; description: string };
 const COMMANDS_EN: Cmd[] = [
   { command: "start",      description: "Welcome screen" },
   { command: "add",        description: "Add a new transaction (step-by-step)" },
+  { command: "dashboard",  description: "Open your personal dashboard" },
   { command: "report",     description: "Quick summary of this month" },
   { command: "categories", description: "List your income / expense categories" },
   { command: "undo",       description: "Delete the last entry" },
+  { command: "reset",      description: "Reset your dashboard password" },
   { command: "lang",       description: "Change language" },
   { command: "help",       description: "Show help and examples" },
 ];
 const COMMANDS_UZ: Cmd[] = [
   { command: "start",      description: "Boshlash sahifasi" },
   { command: "add",        description: "Yangi tranzaksiya qo'shish (qadamma-qadam)" },
+  { command: "dashboard",  description: "Shaxsiy boshqaruv panelini ochish" },
   { command: "report",     description: "Joriy oy hisoboti" },
   { command: "categories", description: "Kategoriyalar ro'yxati" },
   { command: "undo",       description: "Oxirgi yozuvni o'chirish" },
+  { command: "reset",      description: "Parolni tiklash" },
   { command: "lang",       description: "Tilni o'zgartirish" },
   { command: "help",       description: "Yordam va misollar" },
 ];
 const COMMANDS_RU: Cmd[] = [
   { command: "start",      description: "Приветствие" },
   { command: "add",        description: "Добавить транзакцию (пошагово)" },
+  { command: "dashboard",  description: "Открыть личную панель" },
   { command: "report",     description: "Сводка по текущему месяцу" },
   { command: "categories", description: "Список категорий доходов и расходов" },
   { command: "undo",       description: "Удалить последнюю запись" },
+  { command: "reset",      description: "Сбросить пароль" },
   { command: "lang",       description: "Сменить язык" },
   { command: "help",       description: "Помощь и примеры" },
 ];
@@ -112,9 +117,11 @@ async function main() {
   await setShortDescription(SHORT_UZ, "uz");
   await setShortDescription(SHORT_RU, "ru");
 
-  // Menu button: only set "web_app" when we have an https URL (Telegram requires
-  // HTTPS for the in-Telegram mini-app). Otherwise use default (commands menu).
-  await setMenuButton(APP_URL && /^https:\/\//.test(APP_URL) ? APP_URL : undefined);
+  // Each user has their own dashboard URL now (signed claim link or session-
+  // gated /login). A static menu-button URL would point everyone at the same
+  // place, so use the default commands-menu — users tap /dashboard to get
+  // their personal link.
+  await setMenuButton(undefined);
 
   console.log("\n✓ Bot profile updated.");
 }

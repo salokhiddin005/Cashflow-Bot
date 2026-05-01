@@ -2,13 +2,15 @@ import { format, parseISO } from "date-fns";
 import { Repeat, Bell, AlertCircle } from "lucide-react";
 import { Card, CardBody, CardHeader, EmptyState, Pill } from "./ui";
 import { detectRecurring } from "@/lib/insights";
+import { requireUserWorkspace } from "@/lib/auth/session";
 import { formatMoney } from "@/lib/format";
 
 const cadenceWord = (l: "weekly" | "biweekly" | "monthly") =>
   l === "weekly" ? "weekly" : l === "biweekly" ? "every 2 weeks" : "monthly";
 
 export async function RecurringPanel({ limit = 5 }: { limit?: number }) {
-  const all = await detectRecurring();
+  const { workspace } = await requireUserWorkspace();
+  const all = await detectRecurring(workspace.id);
   // Hide low-confidence in the main view; render up to `limit`
   const items = all.filter((r) => r.confidence !== "low").slice(0, limit);
 
