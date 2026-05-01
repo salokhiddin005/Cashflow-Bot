@@ -49,6 +49,20 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
 
+-- Short numeric one-time codes for phone reset (delivered via Telegram bot
+-- DM rather than SMS). Stored hashed; capped at 5 attempts before lockout
+-- so the 6-digit codespace can't be brute-forced.
+CREATE TABLE IF NOT EXISTS password_reset_otps (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash   TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  used_at     TEXT,
+  created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+CREATE INDEX IF NOT EXISTS idx_otp_user ON password_reset_otps(user_id);
+
 -- ─── Workspaces (one per user) ─────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS workspaces (

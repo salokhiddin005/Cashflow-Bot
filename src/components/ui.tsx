@@ -62,17 +62,22 @@ export function Pill({
   );
 }
 
-// Polished button system. Primary/danger now use a soft gradient with
-// a layered shadow. All variants subtly lift on hover and press in on
-// active. The "group" class on every button lets icon children opt
-// into a hover-nudge with `group-hover:translate-x-0.5` etc.
+// Tiered button system — color carries meaning, no random palette.
+//   primary    — main CTA (warm amber→orange→rose gradient). Use sparingly.
+//   secondary  — alternative actions (subtle warm border, hover tints)
+//   ghost      — passive / dismiss (no chrome until hover)
+//   danger     — destructive (rose→red gradient)
+//   success    — confirm / save (warm emerald→amber)
+//   telegram   — anything that opens / sends to Telegram (Telegram brand blue)
+// Every variant lifts on hover and presses in on active. Icons inside opt
+// into the lift via `group-hover:translate-x-0.5` etc.
 export function Button({
   variant = "primary",
   size = "md",
   className,
   ...rest
 }: ComponentProps<"button"> & {
-  variant?: "primary" | "secondary" | "ghost" | "danger" | "success";
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "success" | "telegram";
   size?: "sm" | "md" | "lg";
 }) {
   const sizes: Record<string, string> = {
@@ -82,12 +87,13 @@ export function Button({
   };
   const variants: Record<string, string> = {
     primary:
-      "bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-[0_4px_14px_-4px_rgba(99,102,241,0.45)] " +
-      "hover:from-indigo-500 hover:to-violet-500 hover:shadow-[0_8px_22px_-6px_rgba(99,102,241,0.55)] hover:-translate-y-0.5 " +
-      "active:translate-y-0 active:shadow-[0_2px_8px_-2px_rgba(99,102,241,0.45)]",
+      "bg-gradient-to-br from-amber-500 via-orange-500 to-rose-500 text-white shadow-[0_4px_14px_-4px_rgba(234,88,12,0.5)] " +
+      "hover:from-amber-400 hover:via-orange-400 hover:to-rose-400 hover:shadow-[0_8px_22px_-6px_rgba(234,88,12,0.6)] hover:-translate-y-0.5 " +
+      "active:translate-y-0 active:shadow-[0_2px_8px_-2px_rgba(234,88,12,0.5)]",
     secondary:
       "border border-[--color-border] bg-[--color-surface] text-[--color-foreground] shadow-sm " +
-      "hover:bg-[--color-surface-2] hover:shadow hover:-translate-y-0.5 " +
+      "hover:bg-amber-50 hover:border-amber-300 hover:shadow hover:-translate-y-0.5 " +
+      "dark:hover:bg-amber-950/40 dark:hover:border-amber-800 " +
       "active:translate-y-0 active:shadow-sm",
     ghost:
       "text-[--color-foreground] hover:bg-[--color-surface-2] active:scale-[0.97]",
@@ -96,8 +102,15 @@ export function Button({
       "hover:from-rose-500 hover:to-red-500 hover:shadow-[0_8px_22px_-6px_rgba(244,63,94,0.55)] hover:-translate-y-0.5 " +
       "active:translate-y-0",
     success:
-      "bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-[0_4px_14px_-4px_rgba(16,185,129,0.45)] " +
-      "hover:from-emerald-500 hover:to-teal-500 hover:shadow-[0_8px_22px_-6px_rgba(16,185,129,0.55)] hover:-translate-y-0.5 " +
+      "bg-gradient-to-br from-emerald-600 via-emerald-500 to-amber-500 text-white shadow-[0_4px_14px_-4px_rgba(16,185,129,0.45)] " +
+      "hover:from-emerald-500 hover:via-emerald-400 hover:to-amber-400 hover:shadow-[0_8px_22px_-6px_rgba(16,185,129,0.55)] hover:-translate-y-0.5 " +
+      "active:translate-y-0",
+    telegram:
+      // Telegram brand cyan-blue. Distinctive enough that "open the bot" is
+      // instantly recognisable, but tuned darker so it sits beside the warm
+      // palette without screaming.
+      "bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-[0_4px_14px_-4px_rgba(14,165,233,0.45)] " +
+      "hover:from-sky-400 hover:to-blue-500 hover:shadow-[0_8px_22px_-6px_rgba(14,165,233,0.55)] hover:-translate-y-0.5 " +
       "active:translate-y-0",
   };
   return (

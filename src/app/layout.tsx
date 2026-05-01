@@ -12,12 +12,28 @@ export const metadata: Metadata = {
   description: "A finance manager for small and medium businesses in Uzbekistan.",
 };
 
+// Read the saved theme from localStorage and apply it BEFORE React hydrates,
+// so the page paints in the correct palette on first frame. Must be inline
+// + synchronous — any delay produces a brief flash of the default theme.
+const themeInitScript = `
+(function(){try{
+  var t=localStorage.getItem("cf-theme");
+  if(t!=="day"&&t!=="night"&&t!=="honey")t="honey";
+  document.documentElement.setAttribute("data-theme",t);
+}catch(e){document.documentElement.setAttribute("data-theme","honey");}})();
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
+      data-theme="honey"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        {/* Theme-init script — must run before paint to avoid flash. */}
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className="min-h-full">
         <ToastHost>
           <ConfirmProvider>{children}</ConfirmProvider>

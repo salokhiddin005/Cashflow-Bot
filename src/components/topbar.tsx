@@ -1,5 +1,7 @@
 import { LogOut } from "lucide-react";
 import { TelegramHelpButton } from "./telegram-help";
+import { ThemeSwitcher } from "./theme-switcher";
+import { Button } from "./ui";
 import { getCurrentUserAndWorkspace } from "@/lib/auth/session";
 import { logoutAction } from "@/app/actions";
 
@@ -16,17 +18,14 @@ export async function Topbar() {
         <span className="rounded-md bg-[--color-surface-2] px-2 py-1 text-[13px] font-medium">{workspace.name}</span>
       </div>
       <div className="flex items-center gap-3">
+        <ThemeSwitcher />
         <TelegramHelpButton />
         <span className="hidden text-[12.5px] text-[--color-muted] sm:inline">{identity}</span>
         <form action={logoutAction}>
-          <button
-            type="submit"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[--color-border] bg-[--color-surface] px-2.5 text-[12.5px] font-medium hover:bg-[--color-surface-2]"
-            title="Sign out"
-          >
+          <Button type="submit" variant="secondary" size="sm" title="Sign out">
             <LogOut className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Sign out</span>
-          </button>
+          </Button>
         </form>
       </div>
     </header>

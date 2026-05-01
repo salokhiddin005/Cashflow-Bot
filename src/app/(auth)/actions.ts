@@ -3,17 +3,22 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
+  createOtp,
   createPasswordResetToken,
   createUser,
   createWorkspace,
+  findTelegramForUser,
   findUserByEmail,
   findUserById,
   findUserByPhone,
   findUserByTgUsername,
   getClaimToken,
+  getOtp,
   getPasswordResetToken,
   getWorkspaceByUserId,
+  incrementOtpAttempts,
   markClaimTokenUsed,
+  markOtpUsed,
   markPasswordResetTokenUsed,
   setWorkspaceOwner,
   updateUserPassword,
@@ -31,7 +36,15 @@ import {
   validateTgUsername,
 } from "@/lib/auth/identifiers";
 import { isExpired, newToken, tokenExpiry } from "@/lib/auth/tokens";
-import type { ResetChannel } from "@/lib/db/types";
+import {
+  generateOtp,
+  hashOtp,
+  otpExpiry,
+  otpMatches,
+  OTP_MAX_ATTEMPTS,
+} from "@/lib/auth/otp";
+import { sendPasswordResetEmail } from "@/lib/email/sender";
+import { dmTelegramUser, formatOtpMessage } from "@/lib/bot/dm";
 
 // ─── Signup ──────────────────────────────────────────────────────────────
 
@@ -138,7 +151,7 @@ export async function loginAction(_prev: LoginResult | null, formData: FormData)
   redirect("/");
 }
 
-// ─── Forgot password ─────────────────────────────────────────────────────
+// ─── Forgot password — email channel (Resend) ────────────────────────────
 
 export type ForgotResult =
   | { ok: true; message: string; devLink?: string }
@@ -146,68 +159,150 @@ export type ForgotResult =
 
 const RESET_HOURS = 2;
 
-// `channel` is the user's stated preference for HOW to receive the reset
-// link. We always also resolve it from the identifier — if the user typed an
-// email, the channel is implicitly email regardless of toggle. The bot has a
-// "telegram" channel too: hitting that endpoint generates a token the bot
-// can DM, but you can also DM yourself the link from this page.
-export async function forgotPasswordAction(_prev: ForgotResult | null, formData: FormData): Promise<ForgotResult> {
-  const channelRaw = String(formData.get("channel") ?? "email");
+// Email reset. Looks up the user, mints a token, mails a link via Resend.
+// In dev (no RESEND_API_KEY), surfaces the link inline so testing works.
+export async function forgotPasswordEmailAction(_prev: ForgotResult | null, formData: FormData): Promise<ForgotResult> {
   const identifier = String(formData.get("identifier") ?? "").trim();
-  if (!identifier) return { ok: false, error: "Enter your email or phone number" };
-
-  const channel: ResetChannel =
-    channelRaw === "phone" ? "phone"
-    : channelRaw === "telegram" ? "telegram"
-    : "email";
+  if (!identifier) return { ok: false, error: "Enter your email" };
 
   const guess = guessIdentifier(identifier);
-  if (!guess) return { ok: false, error: "That doesn't look like an email or phone number" };
+  if (!guess || guess.kind !== "email") {
+    return { ok: false, error: "That doesn't look like an email address" };
+  }
 
-  const user =
-    guess.kind === "email"       ? await findUserByEmail(guess.value)
-    : guess.kind === "phone"     ? await findUserByPhone(guess.value)
-    : await findUserByTgUsername(guess.value);
+  const user = await findUserByEmail(guess.value);
 
-  // Always succeed-looking, even if no account — leaks nothing about who has
-  // an account. Token only created if the user really exists.
-  if (user) {
+  if (user?.email) {
     const token = newToken();
     await createPasswordResetToken({
       token,
       user_id: user.id,
-      channel,
+      channel: "email",
       expires_at: tokenExpiry(RESET_HOURS),
     });
 
-    const base = (process.env.APP_BASE_URL?.trim() || "").replace(/\/$/, "") || "";
+    const base = (process.env.APP_BASE_URL?.trim() || "").replace(/\/$/, "")
+      || (process.env.NODE_ENV !== "production" ? "http://localhost:3000" : "");
     const link = `${base}/reset-password/${token}`;
 
-    if (channel === "phone") {
-      // SMS isn't wired up yet (no provider configured), so we surface a
-      // friendly message rather than pretending. Email path still works.
-      return {
-        ok: true,
-        message: "SMS-based reset is coming soon. For now, please request a reset by email or use the /reset command in the Telegram bot.",
-      };
+    const result = await sendPasswordResetEmail({ to: user.email, resetUrl: link });
+    if (!result.sent && result.devLink) {
+      return { ok: true, message: "Reset link generated (RESEND_API_KEY not set — link shown for dev).", devLink: result.devLink };
     }
-
-    if (process.env.NODE_ENV !== "production") {
-      // In dev, hand the user the link directly so they can test without SMTP.
-      return { ok: true, message: "Reset link generated.", devLink: link };
+    if (!result.sent) {
+      console.warn("[reset] email send failed:", result.reason);
+      // Don't leak the failure to the caller — phishing risk.
     }
-    // TODO: send email here (SMTP / Resend / etc.). For now, return success
-    // without leaking whether the account exists.
-    console.log("[reset] email link for", user.id, link);
   }
 
+  // Same response whether the account exists or not — no user enumeration.
   return {
     ok: true,
-    message:
-      channel === "phone"
-        ? "If a matching account exists, you'll get an SMS shortly."
-        : "If a matching account exists, you'll get an email with a reset link shortly.",
+    message: "If a matching account exists, you'll get an email with a reset link shortly. Check your spam folder.",
   };
+}
+
+// ─── Forgot password — phone channel (Telegram-OTP) ──────────────────────
+
+export type PhoneOtpRequestResult =
+  | { ok: true; otp_id: number; message: string }
+  | { ok: false; error: string };
+
+// Step 1 of the phone reset: user types their phone, we look up their
+// linked Telegram chat, generate a 6-digit code, hash + store it, DM the
+// code to the user via the bot. Returns an `otp_id` the next step uses.
+export async function forgotPasswordPhoneRequestAction(
+  _prev: PhoneOtpRequestResult | null,
+  formData: FormData,
+): Promise<PhoneOtpRequestResult> {
+  const identifier = String(formData.get("identifier") ?? "").trim();
+  if (!identifier) return { ok: false, error: "Enter your phone number" };
+
+  const guess = guessIdentifier(identifier);
+  if (!guess || guess.kind !== "phone") {
+    return { ok: false, error: "That doesn't look like a phone number" };
+  }
+
+  const user = await findUserByPhone(guess.value);
+  if (!user) {
+    // We're explicit here (vs the email path) because the user needs to
+    // know to enter a different number — silently "succeeding" would
+    // strand them on the OTP screen with no code arriving.
+    return { ok: false, error: "No account with that phone number" };
+  }
+
+  const tg = await findTelegramForUser(user.id);
+  if (!tg) {
+    return {
+      ok: false,
+      error:
+        "This account isn't linked to Telegram. Use the email reset, or send /reset to the bot to get a link.",
+    };
+  }
+
+  const code = generateOtp();
+  const { id } = await createOtp({
+    user_id: user.id,
+    code_hash: hashOtp(code),
+    expires_at: otpExpiry(),
+  });
+
+  const lang = (tg.language_code === "uz" || tg.language_code === "ru") ? tg.language_code : "en";
+  const sent = await dmTelegramUser(tg.telegram_id, formatOtpMessage(code, lang));
+
+  if (!sent) {
+    // In dev with no bot token, surface the code so we can still test.
+    if (process.env.NODE_ENV !== "production") {
+      return { ok: true, otp_id: id, message: `Code (dev): ${code}` };
+    }
+    return { ok: false, error: "Couldn't send the code via Telegram. Try email reset instead." };
+  }
+
+  return { ok: true, otp_id: id, message: "We sent a 6-digit code to your Telegram chat with the bot." };
+}
+
+export type PhoneOtpVerifyResult = { ok: true } | { ok: false; error: string };
+
+// Step 2: user types the 6-digit code. On success we redirect them straight
+// to /reset-password/[token] with a fresh long token — they set the password
+// there and we sign them in. The OTP itself can't be reused.
+export async function forgotPasswordPhoneVerifyAction(
+  _prev: PhoneOtpVerifyResult | null,
+  formData: FormData,
+): Promise<PhoneOtpVerifyResult> {
+  const otpId = Number(formData.get("otp_id"));
+  const code = String(formData.get("code") ?? "").trim();
+  if (!Number.isFinite(otpId) || !code) {
+    return { ok: false, error: "Missing code or session" };
+  }
+
+  const otp = await getOtp(otpId);
+  if (!otp) return { ok: false, error: "That request has expired — start over." };
+  if (otp.used_at) return { ok: false, error: "This code has already been used." };
+  if (isExpired(otp.expires_at)) return { ok: false, error: "Code expired — request a new one." };
+  if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+    return { ok: false, error: "Too many wrong attempts. Request a new code." };
+  }
+
+  if (!otpMatches(code, otp.code_hash)) {
+    await incrementOtpAttempts(otpId);
+    const left = OTP_MAX_ATTEMPTS - otp.attempts - 1;
+    return {
+      ok: false,
+      error: left > 0 ? `Wrong code — ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many wrong attempts.",
+    };
+  }
+
+  await markOtpUsed(otpId);
+
+  const token = newToken();
+  await createPasswordResetToken({
+    token,
+    user_id: otp.user_id,
+    channel: "phone",
+    expires_at: tokenExpiry(RESET_HOURS),
+  });
+  redirect(`/reset-password/${token}`);
 }
 
 // ─── Reset password ──────────────────────────────────────────────────────

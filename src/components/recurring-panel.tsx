@@ -1,6 +1,6 @@
 import { format, parseISO } from "date-fns";
 import { Repeat, Bell, AlertCircle } from "lucide-react";
-import { Card, CardBody, CardHeader, EmptyState, Pill } from "./ui";
+import { Card, CardBody, CardHeader, Pill } from "./ui";
 import { detectRecurring } from "@/lib/insights";
 import { requireUserWorkspace } from "@/lib/auth/session";
 import { formatMoney } from "@/lib/format";
@@ -26,11 +26,16 @@ export async function RecurringPanel({ limit = 5 }: { limit?: number }) {
             We&apos;ll spot recurring rent, payroll, and subscriptions automatically.
           </div>
         </CardHeader>
-        <CardBody>
-          <EmptyState
-            title="Not enough history yet"
-            description="Once you've logged the same kind of transaction a few times, it'll show up here with the next expected date."
-          />
+        <CardBody className="px-0 py-0">
+          <div className="flex flex-col items-center px-5 py-10 text-center">
+            <div className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-emerald-500/15 to-teal-500/15 text-emerald-600 dark:text-emerald-300">
+              <Repeat className="h-6 w-6 animate-float" />
+            </div>
+            <div className="mt-3 text-[14px] font-semibold">Patterns coming soon</div>
+            <div className="mt-1 max-w-xs text-[12.5px] text-[--color-muted]">
+              Log a few weeks of transactions and I&apos;ll start spotting your rent, payroll, and subscriptions automatically. 🔍
+            </div>
+          </div>
         </CardBody>
       </Card>
     );

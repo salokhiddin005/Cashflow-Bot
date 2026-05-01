@@ -278,6 +278,38 @@ export type AnomalyFlag = {
   multiple: number;
 };
 
+// Logging streak — number of consecutive days, ending today, where the
+// workspace has at least one transaction. Used by the dashboard hero as a
+// gentle motivation cue. Returns 0 if today doesn't have an entry yet.
+export async function loggingStreak(workspaceId: number): Promise<number> {
+  const today = format(new Date(), "yyyy-MM-dd");
+  // Pull distinct days in the last ~120 days, descending. Walk from today
+  // backwards, counting matches until we hit a missing day.
+  const since = format(subDays(new Date(), 120), "yyyy-MM-dd");
+  const rows = await query<{ day: string }>(
+    `SELECT DISTINCT occurred_on AS day
+     FROM transactions
+     WHERE workspace_id = $1 AND occurred_on >= $2 AND occurred_on <= $3
+     ORDER BY occurred_on DESC`,
+    [workspaceId, since, today],
+  );
+  if (rows.length === 0) return 0;
+  const days = new Set(rows.map((r) => r.day));
+  let cur = new Date();
+  let n = 0;
+  // Allow streaks to be "alive" if the user logged yesterday but not yet
+  // today — feels less punishing than resetting at midnight.
+  if (!days.has(format(cur, "yyyy-MM-dd"))) {
+    cur = subDays(cur, 1);
+    if (!days.has(format(cur, "yyyy-MM-dd"))) return 0;
+  }
+  while (days.has(format(cur, "yyyy-MM-dd"))) {
+    n++;
+    cur = subDays(cur, 1);
+  }
+  return n;
+}
+
 export async function findAnomalies(workspaceId: number, transactionIds: number[]): Promise<Map<number, AnomalyFlag>> {
   if (transactionIds.length === 0) return new Map();
   const placeholders = transactionIds.map((_, i) => `$${i + 2}`).join(",");

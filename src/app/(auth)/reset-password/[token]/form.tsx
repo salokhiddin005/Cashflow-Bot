@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { Button } from "@/components/ui";
 import { resetPasswordAction, type ResetResult } from "../../actions";
 
 export function ResetForm({ token }: { token: string }) {
@@ -18,13 +19,9 @@ export function ResetForm({ token }: { token: string }) {
           {state.error}
         </div>
       ) : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-10 items-center justify-center rounded-md bg-[--color-brand] text-[13.5px] font-medium text-[--color-brand-foreground] hover:opacity-90 disabled:opacity-60"
-      >
+      <Button type="submit" variant="success" size="lg" disabled={pending}>
         {pending ? "Saving…" : "Save new password"}
-      </button>
+      </Button>
     </form>
   );
 }

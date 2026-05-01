@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { Button } from "@/components/ui";
 import { signupAction, type SignupResult } from "../actions";
 
 export function SignupForm({
@@ -40,13 +41,9 @@ export function SignupForm({
         </div>
       ) : null}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-10 items-center justify-center rounded-md bg-[--color-brand] text-[13.5px] font-medium text-[--color-brand-foreground] hover:opacity-90 disabled:opacity-60"
-      >
+      <Button type="submit" variant="primary" size="lg" disabled={pending}>
         {pending ? "Creating account…" : "Create account"}
-      </button>
+      </Button>
     </form>
   );
 }

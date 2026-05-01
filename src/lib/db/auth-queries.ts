@@ -215,6 +215,61 @@ export async function findClaimedUserForTelegram(telegramUserId: number): Promis
   return r ? { user_id: toNum(r.user_id) } : undefined;
 }
 
+// Find the Telegram chat to DM a given user. Used by phone-OTP password
+// reset — we look up the user's linked telegram_id + language so we can
+// send the OTP in their preferred language.
+export async function findTelegramForUser(userId: number): Promise<{ telegram_id: number; language_code: string | null } | undefined> {
+  const r = await queryOne<{ telegram_id: number; language_code: string | null }>(
+    "SELECT telegram_id, language_code FROM telegram_users WHERE user_id = $1 ORDER BY id ASC LIMIT 1",
+    [userId],
+  );
+  return r ? { ...r, telegram_id: toNum(r.telegram_id) } : undefined;
+}
+
+// ─── Phone OTPs (delivered via Telegram bot DM) ──────────────────────────
+
+export type OtpRow = {
+  id: number;
+  user_id: number;
+  code_hash: string;
+  expires_at: string;
+  attempts: number;
+  used_at: string | null;
+};
+
+export async function createOtp(input: {
+  user_id: number;
+  code_hash: string;
+  expires_at: string;
+}): Promise<{ id: number }> {
+  const r = await queryOne<{ id: number }>(
+    `INSERT INTO password_reset_otps (user_id, code_hash, expires_at)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [input.user_id, input.code_hash, input.expires_at],
+  );
+  return { id: toNum(r!.id) };
+}
+
+export async function getOtp(id: number): Promise<OtpRow | undefined> {
+  const r = await queryOne<OtpRow>(
+    `SELECT id, user_id, code_hash, expires_at, attempts, used_at
+     FROM password_reset_otps WHERE id = $1`,
+    [id],
+  );
+  return r ? { ...r, id: toNum(r.id), user_id: toNum(r.user_id), attempts: toNum(r.attempts) } : undefined;
+}
+
+export async function incrementOtpAttempts(id: number): Promise<void> {
+  await execute(`UPDATE password_reset_otps SET attempts = attempts + 1 WHERE id = $1`, [id]);
+}
+
+export async function markOtpUsed(id: number): Promise<void> {
+  await execute(
+    `UPDATE password_reset_otps SET used_at = $1 WHERE id = $2`,
+    [new Date().toISOString(), id],
+  );
+}
+
 export async function _listAll(): Promise<{ users: number; workspaces: number }> {
   const u = await query<{ n: string }>("SELECT COUNT(*) AS n FROM users");
   const w = await query<{ n: string }>("SELECT COUNT(*) AS n FROM workspaces");

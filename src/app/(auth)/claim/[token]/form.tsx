@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { Button } from "@/components/ui";
 import {
   claimAndLoginAction,
   signupAction,
@@ -74,13 +75,9 @@ function ClaimSignupForm({ token, prefilledTgUsername }: { token: string; prefil
 
       {state && !state.ok ? <ErrorBox>{state.error}</ErrorBox> : null}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-10 items-center justify-center rounded-md bg-[--color-brand] text-[13.5px] font-medium text-[--color-brand-foreground] hover:opacity-90 disabled:opacity-60"
-      >
+      <Button type="submit" variant="primary" size="lg" disabled={pending}>
         {pending ? "Creating account…" : "Create account & open dashboard"}
-      </button>
+      </Button>
     </form>
   );
 }
@@ -93,13 +90,9 @@ function ClaimSigninForm({ token }: { token: string }) {
       <Field name="identifier" label="Email, phone, or @username" autoComplete="username" required />
       <Field name="password" type="password" label="Password" autoComplete="current-password" required />
       {state && !state.ok ? <ErrorBox>{state.error}</ErrorBox> : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-10 items-center justify-center rounded-md bg-[--color-brand] text-[13.5px] font-medium text-[--color-brand-foreground] hover:opacity-90 disabled:opacity-60"
-      >
+      <Button type="submit" variant="telegram" size="lg" disabled={pending}>
         {pending ? "Signing in…" : "Sign in & connect bot"}
-      </button>
+      </Button>
     </form>
   );
 }

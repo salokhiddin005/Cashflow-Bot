@@ -27,7 +27,7 @@ export function PeriodTabs({ current }: { current: string }) {
             className={clsx(
               "relative rounded-md px-3 py-1.5 transition-all duration-200",
               active
-                ? "bg-gradient-to-br from-indigo-600 to-violet-600 font-medium text-white shadow-[0_2px_8px_-2px_rgba(99,102,241,0.45)]"
+                ? "bg-gradient-to-br from-amber-600 to-orange-600 font-medium text-white shadow-[0_2px_8px_-2px_rgba(217,119,6,0.5)]"
                 : "text-[--color-muted] hover:text-[--color-foreground] hover:bg-[--color-surface-2]",
             )}
           >

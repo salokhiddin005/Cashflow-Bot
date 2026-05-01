@@ -1,19 +1,93 @@
 @import "tailwindcss";
 
-:root {
-  --background: #fafafa;
-  --foreground: #0a0a0a;
-  --surface: #ffffff;
+/* Tailwind's `dark:*` variant — retargeted from the system preference media
+   query to our `[data-theme="night"]` attribute. Means existing `dark:`
+   classes scattered through components light up automatically when night
+   mode is selected. */
+@variant dark (&:where([data-theme="night"], [data-theme="night"] *));
+
+/* ────────────────────────────────────────────────────────────────────
+   Theme system. Three palettes the user can pick from in the topbar:
+     • honey  — warm cream / peach. Default.
+     • day    — clean cool white-paper. Linear/Notion vibe.
+     • night  — warm chocolate / candlelight. Saves eyes after dark.
+
+   Tokens are defined inside [data-theme="*"] blocks so a single attribute
+   on <html> swaps the entire palette in one paint.
+   ──────────────────────────────────────────────────────────────────── */
+
+:root,
+[data-theme="honey"] {
+  --background: #fdf0d5;          /* honey cream — visibly warm */
+  --foreground: #1c1410;
+  --surface: #fff8e7;
+  --surface-2: #f5e6c0;
+  --border: #e0c896;
+  --muted: #7d6b53;
+  --muted-2: #a89880;
+  --brand: #b45309;
+  --brand-foreground: #fff8e7;
+  --success: #059669;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --accent: #c2410c;
+
+  --wash-emerald: linear-gradient(135deg, rgba(5,150,105,0.10),  rgba(5,150,105,0.00)  60%);
+  --wash-rose:    linear-gradient(135deg, rgba(225,29,72,0.10),  rgba(225,29,72,0.00)  60%);
+  --wash-indigo:  linear-gradient(135deg, rgba(180,83,9,0.12),   rgba(245,158,11,0.04) 60%);
+  --wash-amber:   linear-gradient(135deg, rgba(245,158,11,0.12), rgba(245,158,11,0.00) 60%);
+
+  --hero-bg: linear-gradient(135deg, #fff7e6 0%, #ffe8c7 45%, #fdd6a0 100%);
+  --color-scheme: light;
+}
+
+[data-theme="day"] {
+  --background: #ffffff;
+  --foreground: #18181b;
+  --surface: #fafafa;
   --surface-2: #f4f4f5;
   --border: #e4e4e7;
   --muted: #71717a;
   --muted-2: #a1a1aa;
-  --brand: #0f172a;
-  --brand-foreground: #fafafa;
+  --brand: #4f46e5;
+  --brand-foreground: #ffffff;
   --success: #059669;
   --danger: #dc2626;
   --warning: #d97706;
   --accent: #4f46e5;
+
+  --wash-emerald: linear-gradient(135deg, rgba(16,185,129,0.08), rgba(16,185,129,0.00) 60%);
+  --wash-rose:    linear-gradient(135deg, rgba(244,63,94,0.08),  rgba(244,63,94,0.00)  60%);
+  --wash-indigo:  linear-gradient(135deg, rgba(79,70,229,0.10),  rgba(139,92,246,0.04) 60%);
+  --wash-amber:   linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.00) 60%);
+
+  /* Soft pastel — sky-blue → lavender → blush. Friendlier than pure white. */
+  --hero-bg: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 50%, #fce7f3 100%);
+  --color-scheme: light;
+}
+
+[data-theme="night"] {
+  --background: #1c1410;          /* deep warm chocolate */
+  --foreground: #faf6ef;
+  --surface: #2a1f18;             /* warm coffee */
+  --surface-2: #3b2c22;            /* warm cocoa */
+  --border: #4a3a2e;              /* warm bronze */
+  --muted: #c4b5a4;
+  --muted-2: #92837a;
+  --brand: #fbbf24;               /* warm amber-400 */
+  --brand-foreground: #1c1410;
+  --success: #10b981;
+  --danger: #f43f5e;
+  --warning: #fbbf24;
+  --accent: #fb923c;
+
+  --wash-emerald: linear-gradient(135deg, rgba(16,185,129,0.16), rgba(16,185,129,0.00) 60%);
+  --wash-rose:    linear-gradient(135deg, rgba(244,63,94,0.18),  rgba(244,63,94,0.00)  60%);
+  --wash-indigo:  linear-gradient(135deg, rgba(251,191,36,0.18), rgba(234,88,12,0.05)  60%);
+  --wash-amber:   linear-gradient(135deg, rgba(245,158,11,0.20), rgba(245,158,11,0.00) 60%);
+
+  --hero-bg: linear-gradient(135deg, #4a1d05 0%, #7c2d12 45%, #b45309 100%);
+  --color-scheme: dark;
 }
 
 @theme inline {
@@ -34,31 +108,14 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #09090b;
-    --foreground: #fafafa;
-    --surface: #18181b;
-    --surface-2: #27272a;
-    --border: #27272a;
-    --muted: #a1a1aa;
-    --muted-2: #71717a;
-    --brand: #fafafa;
-    --brand-foreground: #09090b;
-  }
-}
-
 html, body {
   background: var(--background);
   color: var(--foreground);
-  /* Tells the browser to render native form chrome (select dropdowns,
-     date pickers, scrollbars) using the matching theme — fixes the
-     unreadable white-on-white <select> options in dark mode. */
-  color-scheme: light dark;
+  /* Native form chrome (selects, scrollbars, date pickers) follows the
+     theme — light schemes get light chrome, night gets dark chrome. */
+  color-scheme: var(--color-scheme);
 }
 
-/* Belt-and-suspenders: explicitly style native <option> elements so
-   browsers that don't honour color-scheme still render them readably. */
 option, optgroup {
   background-color: var(--surface);
   color: var(--foreground);
@@ -68,16 +125,60 @@ body {
   font-feature-settings: "ss01", "cv11";
 }
 
-/* Focus ring helpers */
+/* Smooth crossfade when the user swaps themes. The vars change instantly
+   but the visible color transitions, so the swap doesn't strobe. */
+html, body, .hover-lift, .bg-hero {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Animation utilities — Duolingo-warm, not Vegas.
+   ──────────────────────────────────────────────────────────────────── */
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.92); }
+  60%  { opacity: 1; transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0px); }
+  50%      { transform: translateY(-3px); }
+}
+@keyframes flame-flicker {
+  0%, 100% { transform: scale(1) rotate(-1deg); }
+  50%      { transform: scale(1.08) rotate(2deg); }
+}
+
 @layer utilities {
   .focus-ring {
     @apply outline-none ring-0 focus-visible:ring-2 focus-visible:ring-[--color-accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--color-background];
   }
+  .animate-fade-in-up { animation: fade-in-up 0.45s ease-out both; }
+  .animate-pop-in     { animation: pop-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  .animate-float      { animation: float-slow 3.5s ease-in-out infinite; }
+  .animate-flicker    { animation: flame-flicker 1.4s ease-in-out infinite; }
+
+  .hover-lift { transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease; }
+  .hover-lift:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+
+  .bg-hero { background-image: var(--hero-bg); }
+  .bg-wash-emerald { background-image: var(--wash-emerald); }
+  .bg-wash-rose    { background-image: var(--wash-rose); }
+  .bg-wash-indigo  { background-image: var(--wash-indigo); }
+  .bg-wash-amber   { background-image: var(--wash-amber); }
 }
 
 /* Tabular numerals on money */
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
-/* Recharts dark-mode tweak */
+/* Recharts theming */
 .recharts-cartesian-axis-tick text { fill: var(--muted); }
 .recharts-tooltip-wrapper { outline: none !important; }
