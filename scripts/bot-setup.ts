@@ -64,9 +64,9 @@ const DESCRIPTION_RU =
   "Учёт денежного потока в бизнесе на узбекском, русском или английском — голосом или текстом. " +
   "Записывает приходы и расходы, даёт отчёты, синхронизирован с веб-панелью.";
 
-const SHORT_EN = "Cashflow Manager — voice & text bookkeeping for SMBs";
-const SHORT_UZ = "Cashflow Manager — kichik biznes uchun ovozli buxgalteriya";
-const SHORT_RU = "Cashflow Manager — голосовая бухгалтерия для бизнеса";
+const SHORT_EN = "Bizness Hisobchi — voice & text bookkeeping for SMBs";
+const SHORT_UZ = "Bizness Hisobchi — kichik biznes uchun ovozli buxgalteriya";
+const SHORT_RU = "Bizness Hisobchi — голосовая бухгалтерия для бизнеса";
 
 async function call(method: string, body: unknown) {
   const res = await fetch(`${API}/${method}`, {

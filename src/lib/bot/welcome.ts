@@ -42,7 +42,7 @@ export const LANGUAGE_PICKER_BUTTONS: { text: string; callbackData: string }[] =
 
 const WELCOME_EN = `👋 *Welcome aboard!*
 
-I'm *Cashflow Manager* — your business finance assistant. I help small and medium businesses keep track of money the easy way: no spreadsheets, no paperwork, no app to learn.
+I'm *Bizness Hisobchi* — your business finance assistant. I help small and medium businesses keep track of money the easy way: no spreadsheets, no paperwork, no app to learn.
 
 ✨ *How it works*
 
@@ -73,7 +73,7 @@ Ready when you are. Try logging your first transaction now ✨`;
 
 const WELCOME_UZ = `👋 *Xush kelibsiz!*
 
-Men — *Cashflow Manager*, biznesingiz uchun moliya yordamchisiman. Kichik va o'rta bizneslarga pulni oson hisobga olishda yordam beraman: jadvalsiz, qog'ozsiz, o'rganadigan ilovasiz.
+Men — *Bizness Hisobchi*, biznesingiz uchun moliya yordamchisiman. Kichik va o'rta bizneslarga pulni oson hisobga olishda yordam beraman: jadvalsiz, qog'ozsiz, o'rganadigan ilovasiz.
 
 ✨ *Qanday ishlaydi?*
 
@@ -104,7 +104,7 @@ Tayyor bo'lganingizda boshlang. Birinchi yozuvingizni hozir sinab ko'ring ✨`;
 
 const WELCOME_RU = `👋 *Добро пожаловать!*
 
-Я — *Cashflow Manager*, ваш финансовый помощник для бизнеса. Помогаю малому и среднему бизнесу легко вести учёт денег: без таблиц, без бумаг, без приложения, которое надо изучать.
+Я — *Bizness Hisobchi*, ваш финансовый помощник для бизнеса. Помогаю малому и среднему бизнесу легко вести учёт денег: без таблиц, без бумаг, без приложения, которое надо изучать.
 
 ✨ *Как это работает*
 

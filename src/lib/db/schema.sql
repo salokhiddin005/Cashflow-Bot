@@ -1,4 +1,4 @@
--- Multi-tenant schema for Cashflow Manager.
+-- Multi-tenant schema for Bizness Hisobchi.
 -- Every user gets their own workspace + categories + transactions.
 -- Authentication: email / phone / Telegram username (any one is enough).
 -- Telegram users get a workspace as soon as they /start the bot, then claim

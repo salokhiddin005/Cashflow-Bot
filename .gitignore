@@ -45,3 +45,6 @@ next-env.d.ts
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
+
+# demo recording — too large for GitHub (>100 MB per-file limit)
+/demo video/

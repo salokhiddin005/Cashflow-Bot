@@ -1,4 +1,4 @@
-# Sahifa — Business Finance Manager
+# Bizness Hisobchi — Business Finance Manager
 
 A Telegram bot + web dashboard that lets a small or medium business in Uzbekistan log income and expenses **by talking to a bot** in Uzbek, Russian, or English (voice or text), and see everything in one place. Built for the Task 01 brief.
 
@@ -27,7 +27,7 @@ A Telegram bot + web dashboard that lets a small or medium business in Uzbekista
 
 ```bash
 git clone <this-repo>
-cd finance-manager
+cd bizness-hisobchi
 cp .env.example .env.local       # fill in the keys (see below)
 npm install
 npm run dev                      # dashboard on http://localhost:3000

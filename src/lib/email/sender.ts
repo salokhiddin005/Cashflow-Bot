@@ -13,8 +13,8 @@ function getResend(): Resend | null {
 }
 
 // Default sender — Resend's onboarding domain works without DNS verification.
-// Bring your own once you have a domain in Resend (e.g. "Sahifa <noreply@yourdomain.com>").
-const FROM = process.env.RESEND_FROM?.trim() || "Sahifa <onboarding@resend.dev>";
+// Bring your own once you have a domain in Resend (e.g. "Bizness Hisobchi <noreply@yourdomain.com>").
+const FROM = process.env.RESEND_FROM?.trim() || "Bizness Hisobchi <onboarding@resend.dev>";
 
 export type SendResult = { sent: true } | { sent: false; reason: string; devLink?: string };
 
@@ -43,7 +43,7 @@ export async function sendPasswordResetEmail(input: {
     const result = await r.emails.send({
       from: FROM,
       to: input.to,
-      subject: "Reset your Sahifa password",
+      subject: "Reset your Bizness Hisobchi password",
       html: passwordResetHtml(input.resetUrl),
       text: passwordResetText(input.resetUrl),
     });
@@ -80,7 +80,7 @@ function passwordResetHtml(url: string): string {
 
 function passwordResetText(url: string): string {
   return [
-    "Reset your Sahifa password",
+    "Reset your Bizness Hisobchi password",
     "",
     "Click the link below to choose a new password. It expires in 2 hours.",
     "",

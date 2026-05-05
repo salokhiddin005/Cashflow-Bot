@@ -49,8 +49,8 @@ async function main() {
   // Pick the most recently-created workspace, or create a brand-new
   // unclaimed one for demo purposes if the DB is empty.
   const rows = await query<{ id: string }>("SELECT id FROM workspaces ORDER BY id DESC LIMIT 1");
-  const workspaceId = rows[0] ? Number(rows[0].id) : (await createWorkspace(null, "Sahifa Demo")).id;
-  await updateWorkspace(workspaceId, { starting_balance: 35_000_000, name: "Sahifa Demo" });
+  const workspaceId = rows[0] ? Number(rows[0].id) : (await createWorkspace(null, "Bizness Hisobchi Demo")).id;
+  await updateWorkspace(workspaceId, { starting_balance: 35_000_000, name: "Bizness Hisobchi Demo" });
 
   for (const s of SAMPLES) {
     const cat = await getCategoryByKey(workspaceId, s.categoryKey);

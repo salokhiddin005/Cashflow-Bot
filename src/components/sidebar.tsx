@@ -27,7 +27,7 @@ export async function Sidebar() {
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[--color-brand] text-[--color-brand-foreground]">
           <Wallet className="h-4 w-4" />
         </div>
-        <span>Sahifa</span>
+        <span>Bizness Hisobchi</span>
       </Link>
 
       <nav className="flex-1 px-3 py-2">
