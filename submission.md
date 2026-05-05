@@ -1,6 +1,6 @@
 # Submission — Task 01: Business Finance Manager
 
-GitHub repo ==> https://github.com/salokhiddin005/Cashflow-Bot
+GitHub repo ==> https://github.com/salokhiddin005/Bizness-Hisobchi
 
 Telegram bot ==> @business_ledger_bot (https://t.me/business_ledger_bot)
 
